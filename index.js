@@ -1,4 +1,5 @@
 require('dotenv').config();
+const { createClient } = require('@supabase/supabase-js');
 const express = require('express');
 const cors = require('cors');
 const multer = require('multer');
@@ -9,6 +10,8 @@ const upload = multer({ storage: multer.memoryStorage() });
 
 app.use(cors());
 app.use(express.json());
+
+const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_KEY);
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY
@@ -89,6 +92,37 @@ Calculate feePercentage as (total fees / rentalCharges * 100). Set highFees to t
         raw: content 
       });
     }
+
+// Save to Supabase
+const feesTotal = parsed.fees ? Object.values(parsed.fees).reduce((sum, f) => sum + (f || 0), 0) : 0;
+const feePercentage = parsed.rental_subtotal > 0 ? (feesTotal / parsed.rental_subtotal) * 100 : 0;
+
+// Determine if equipment rental
+const rentalKeywords = ['herc', 'sunbelt', 'united rentals', 'ohio cat', 'admar', 'skyworks', 'caterpillar', 'rental'];
+const vendorLower = (parsed.vendor || '').toLowerCase();
+const isRental = rentalKeywords.some(kw => vendorLower.includes(kw));
+
+await supabase.from('parsed_invoices').insert({
+  source: 'parseapi',
+  invoice_type: isRental ? 'equipment_rental' : 'unknown',
+  is_equipment_rental: isRental,
+  vendor_name: parsed.vendor,
+  vendor_normalized: vendorLower.split(' ')[0],
+  invoice_number: parsed.invoice_number,
+  invoice_date: parsed.invoice_date,
+  po_number: parsed.po_number,
+  customer_name: parsed.customer_name,
+  job_site: parsed.job_site,
+  rental_subtotal: parsed.rental_subtotal,
+  fees_total: feesTotal,
+  tax: parsed.tax,
+  total: parsed.total,
+  fees: parsed.fees,
+  equipment: parsed.equipment,
+  fee_percentage: feePercentage,
+  confidence: parsed.confidence,
+  raw_response: parsed
+});
 
     res.json({
       success: true,
