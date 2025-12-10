@@ -17,21 +17,41 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY
 });
 
-// Health check
 app.get('/', (req, res) => {
   res.json({ status: 'ParseAPI is running' });
 });
 
-// Parse single invoice (file upload)
+app.get('/test-db', async (req, res) => {
+  try {
+    console.log('[/test-db] hit');
+    const { data, error } = await supabase
+      .from('parsed_invoices')
+      .insert({
+        source: 'parseapi',
+        app_source: 'test',
+        vendor_name: 'Test Vendor',
+        invoice_number: 'TEST-123',
+        total: 100
+      });
+    console.log('[/test-db] data:', data);
+    console.log('[/test-db] error:', error);
+    if (error) {
+      return res.status(500).json({ success: false, error });
+    }
+    res.json({ success: true, data });
+  } catch (err) {
+    console.error('[/test-db] exception:', err);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 app.post('/parse', upload.single('file'), async (req, res) => {
   try {
     if (!req.file) {
       return res.status(400).json({ error: 'No file uploaded' });
     }
-
     const base64 = req.file.buffer.toString('base64');
     const mimeType = req.file.mimetype;
-
     const response = await openai.chat.completions.create({
       model: 'gpt-4o',
       messages: [
@@ -41,7 +61,6 @@ app.post('/parse', upload.single('file'), async (req, res) => {
             {
               type: 'text',
               text: `You are an invoice parser for construction equipment rentals. Extract the following from this invoice and return ONLY valid JSON, no other text:
-
 {
   "vendor": "company name",
   "invoice_number": "invoice number",
@@ -68,9 +87,7 @@ app.post('/parse', upload.single('file'), async (req, res) => {
       ],
       max_tokens: 1000
     });
-
     const content = response.choices[0].message.content;
-    
     let parsed;
     try {
       const jsonStr = content.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
@@ -78,27 +95,19 @@ app.post('/parse', upload.single('file'), async (req, res) => {
     } catch (e) {
       return res.status(500).json({ error: 'Failed to parse invoice', raw: content });
     }
-
-    res.json({
-      success: true,
-      data: parsed
-    });
-
+    res.json({ success: true, data: parsed });
   } catch (error) {
     console.error('Parse error:', error);
     res.status(500).json({ error: 'Failed to process invoice', message: error.message });
   }
 });
 
-// Parse invoice from base64 (for Rate Daddy)
 app.post('/parse-base64', async (req, res) => {
   try {
     const { base64Image, mimeType } = req.body;
-
     if (!base64Image) {
       return res.status(400).json({ error: 'No image provided' });
     }
-
     const response = await openai.chat.completions.create({
       model: 'gpt-4o',
       messages: [
@@ -108,7 +117,6 @@ app.post('/parse-base64', async (req, res) => {
             {
               type: 'text',
               text: `You are an invoice parser for construction equipment rentals. Extract the following data from this invoice image and return ONLY valid JSON, no other text.
-
 {
   "vendor": "Company name",
   "invoice_number": "Invoice number",
@@ -140,9 +148,7 @@ app.post('/parse-base64', async (req, res) => {
   "total": 0.00,
   "confidence": "high"
 }
-
 Set confidence to "high" if all fields are clearly readable, "medium" if some fields are unclear, "low" if significant parts are unreadable.
-
 Return ONLY the JSON object, no markdown, no explanation.`
             },
             {
@@ -156,9 +162,7 @@ Return ONLY the JSON object, no markdown, no explanation.`
       ],
       max_tokens: 2000
     });
-
     const content = response.choices[0].message.content;
-
     let parsed;
     try {
       parsed = JSON.parse(content);
@@ -170,16 +174,12 @@ Return ONLY the JSON object, no markdown, no explanation.`
         return res.status(500).json({ success: false, error: 'Could not parse OpenAI response as JSON' });
       }
     }
-
-    // Save to Supabase
     const feesTotal = parsed.fees ? Object.values(parsed.fees).reduce((sum, f) => sum + (parseFloat(f) || 0), 0) : 0;
     const rentalSubtotal = parseFloat(parsed.rental_subtotal) || 0;
     const feePercentage = rentalSubtotal > 0 ? (feesTotal / rentalSubtotal) * 100 : 0;
-    
     const rentalKeywords = ['herc', 'sunbelt', 'united rentals', 'ohio cat', 'admar', 'skyworks', 'caterpillar', 'rental'];
     const vendorLower = (parsed.vendor || '').toLowerCase();
     const isRental = rentalKeywords.some(kw => vendorLower.includes(kw));
-    
     const { data: insertData, error: insertError } = await supabase.from('parsed_invoices').insert({
       source: 'parseapi',
       app_source: 'rate_daddy',
@@ -202,16 +202,9 @@ Return ONLY the JSON object, no markdown, no explanation.`
       confidence: parsed.confidence || null,
       raw_response: parsed || {}
     });
-    
     console.log("INSERT DATA:", insertData);
     console.log("INSERT ERROR:", insertError);
-
-    res.json({
-      success: true,
-      data: parsed,
-      raw_response: content
-    });
-
+    res.json({ success: true, data: parsed, raw_response: content });
   } catch (error) {
     console.error('Parse error:', error);
     res.status(500).json({ success: false, error: error.message });
