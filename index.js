@@ -104,6 +104,106 @@ Calculate feePercentage as (total fees / rentalCharges * 100). Set highFees to t
   }
 });
 
+// Parse invoice from base64 (for Rate Daddy)
+app.post('/parse-base64', async (req, res) => {
+    try {
+      const { base64Image, mimeType } = req.body;
+  
+      if (!base64Image) {
+        return res.status(400).json({ error: 'No image provided' });
+      }
+  
+      const response = await openai.chat.completions.create({
+        model: 'gpt-4o',
+        messages: [
+          {
+            role: 'user',
+            content: [
+              {
+                type: 'text',
+                text: `You are an invoice parser for construction equipment rentals. Extract the following data from this invoice image and return ONLY valid JSON, no other text.
+  
+  {
+    "vendor": "Company name",
+    "invoice_number": "Invoice number",
+    "invoice_date": "YYYY-MM-DD format",
+    "po_number": "PO number or null",
+    "customer_name": "Customer/Bill to name",
+    "job_site": "Job site address or null",
+    "equipment": [
+      {
+        "description": "Equipment description",
+        "serial_number": "Serial number or null",
+        "day_rate": 0.00,
+        "week_rate": 0.00,
+        "four_week_rate": 0.00,
+        "amount": 0.00
+      }
+    ],
+    "rental_subtotal": 0.00,
+    "fees": {
+      "delivery": 0.00,
+      "pickup": 0.00,
+      "environmental": 0.00,
+      "fuel_surcharge": 0.00,
+      "damage_waiver": 0.00,
+      "transport_surcharge": 0.00,
+      "other_fees": 0.00
+    },
+    "fees_total": 0.00,
+    "tax": 0.00,
+    "total": 0.00,
+    "confidence": "high"
+  }
+  
+  Set confidence to "high" if all fields are clearly readable, "medium" if some fields are unclear, "low" if significant parts are unreadable.
+  
+  Return ONLY the JSON object, no markdown, no explanation.`
+              },
+              {
+                type: 'image_url',
+                image_url: {
+                  url: `data:${mimeType || 'image/png'};base64,${base64Image}`
+                }
+              }
+            ]
+          }
+        ],
+        max_tokens: 2000
+      });
+  
+      const content = response.choices[0].message.content;
+  
+      let parsed;
+      try {
+        parsed = JSON.parse(content);
+      } catch (e) {
+        const jsonMatch = content.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+          parsed = JSON.parse(jsonMatch[0]);
+        } else {
+          return res.status(500).json({ 
+            success: false,
+            error: 'Could not parse OpenAI response as JSON' 
+          });
+        }
+      }
+  
+      res.json({
+        success: true,
+        data: parsed,
+        raw_response: content
+      });
+  
+    } catch (error) {
+      console.error('Parse error:', error);
+      res.status(500).json({ 
+        success: false,
+        error: error.message 
+      });
+    }
+  });
+
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
   console.log(`ParseAPI running on port ${PORT}`);
