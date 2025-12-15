@@ -125,6 +125,28 @@ app.post('/parse-base64', async (req, res) => {
             {
               type: 'text',
               text: `You are an invoice parser for construction equipment rentals. Extract the following data from this invoice image and return ONLY valid JSON, no other text.
+
+IMPORTANT FEE CATEGORIZATION RULES:
+- "fees" should ONLY include surcharges and extra charges that are ADD-ONS to services
+- DO NOT include delivery charges, pickup charges, or freight charges in "fees" - these are services, not fees
+- "delivery_pickup_total" should include: delivery charge, pickup charge, freight, hauling - these are SERVICES
+
+WHAT COUNTS AS A FEE (put in "fees" object):
+- Environmental fee / Enviro disposal fee
+- Fuel surcharge / Fuel service charge
+- Transportation surcharge (this is a SURCHARGE on delivery, not the delivery itself)
+- Damage waiver / Loss damage waiver
+- Admin fee / Administrative fee
+- Rental protection / Insurance
+- Shop supplies / Misc charges
+- Any line with "surcharge", "fee", "environmental", "fuel" in the name
+
+WHAT IS NOT A FEE (put in "delivery_pickup_total"):
+- Delivery charge / Delivery freight
+- Pickup charge / Pick-up freight  
+- Freight / Hauling
+- Transportation (the base charge, not surcharge)
+
 {
   "vendor": "Company name",
   "invoice_number": "Invoice number",
@@ -143,19 +165,19 @@ app.post('/parse-base64', async (req, res) => {
     }
   ],
   "rental_subtotal": 0.00,
+  "delivery_pickup_total": 0.00,
   "fees": {
-    "delivery": 0.00,
-    "pickup": 0.00,
     "environmental": 0.00,
     "fuel_surcharge": 0.00,
-    "damage_waiver": 0.00,
     "transport_surcharge": 0.00,
+    "damage_waiver": 0.00,
     "other_fees": 0.00
   },
   "tax": 0.00,
   "total": 0.00,
   "confidence": "high"
 }
+
 Set confidence to "high" if all fields are clearly readable, "medium" if some fields are unclear, "low" if significant parts are unreadable.
 Return ONLY the JSON object, no markdown, no explanation.`
             },
@@ -182,12 +204,16 @@ Return ONLY the JSON object, no markdown, no explanation.`
         return res.status(500).json({ success: false, error: 'Could not parse OpenAI response as JSON' });
       }
     }
+    
+    // Calculate fees total (excluding delivery/pickup which are services)
     const feesTotal = parsed.fees ? Object.values(parsed.fees).reduce((sum, f) => sum + (parseFloat(f) || 0), 0) : 0;
     const rentalSubtotal = parseFloat(parsed.rental_subtotal) || 0;
     const feePercentage = rentalSubtotal > 0 ? (feesTotal / rentalSubtotal) * 100 : 0;
+    
     const rentalKeywords = ['herc', 'sunbelt', 'united rentals', 'ohio cat', 'admar', 'skyworks', 'caterpillar', 'rental'];
     const vendorLower = (parsed.vendor || '').toLowerCase();
     const isRental = rentalKeywords.some(kw => vendorLower.includes(kw));
+    
     const { data: insertData, error: insertError } = await supabase.from('parsed_invoices').insert({
       source: 'parseapi',
       app_source: 'rate_daddy',
