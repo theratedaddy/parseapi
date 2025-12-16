@@ -265,7 +265,7 @@ Return ONLY the JSON object, no markdown, no explanation.`
         try {
           // Classify the equipment
           const { data: classifyData } = await supabase.rpc('classify_equipment', {
-            description: item.description
+            p_description: item.description
           });
           
           if (classifyData && classifyData.length > 0) {
@@ -301,7 +301,7 @@ Return ONLY the JSON object, no markdown, no explanation.`
               await supabase.from('equipment_rates').insert({
                 invoice_id: insertData.id,
                 user_id: userId || null,
-                equipment_description: item.description,
+                equipment_p_description: item.description,
                 equipment_class: classified.equipment_class,
                 equipment_size: classified.equipment_size,
                 day_rate: item.day_rate,
