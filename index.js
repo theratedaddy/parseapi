@@ -112,7 +112,7 @@ app.post('/parse', upload.single('file'), async (req, res) => {
 
 app.post('/parse-base64', async (req, res) => {
   try {
-    const { base64Image, mimeType } = req.body;
+    const { base64Image, mimeType, userId } = req.body;
     if (!base64Image) {
       return res.status(400).json({ error: 'No image provided' });
     }
@@ -157,6 +157,8 @@ FOR RENTAL_SUBTOTAL:
 - Do NOT use TAXABLE CHARGES (that includes fees)
 - Do NOT use TOTAL CHARGES
 
+FOR EQUIPMENT: Extract day_rate if shown. Also try to estimate rental_days from dates or billing period.
+
 {
   "vendor": "Company name (e.g. Herc Rentals, ADMAR, Sunbelt)",
   "invoice_number": "Invoice number",
@@ -171,6 +173,7 @@ FOR RENTAL_SUBTOTAL:
       "day_rate": 0.00,
       "week_rate": 0.00,
       "four_week_rate": 0.00,
+      "rental_days": 1,
       "amount": 0.00
     }
   ],
@@ -223,9 +226,11 @@ Return ONLY the JSON object, no markdown, no explanation.`
     const vendorLower = (parsed.vendor || '').toLowerCase();
     const isRental = rentalKeywords.some(kw => vendorLower.includes(kw));
     
+    // Insert invoice first to get the ID
     const { data: insertData, error: insertError } = await supabase.from('parsed_invoices').insert({
       source: 'parseapi',
       app_source: 'rate_daddy',
+      user_id: userId || null,
       invoice_type: isRental ? 'equipment_rental' : 'unknown',
       is_equipment_rental: isRental,
       vendor_name: parsed.vendor || null,
@@ -244,10 +249,94 @@ Return ONLY the JSON object, no markdown, no explanation.`
       fee_percentage: feePercentage || null,
       confidence: parsed.confidence || null,
       raw_response: parsed || {}
-    });
+    }).select().single();
+    
     console.log("INSERT DATA:", insertData);
     console.log("INSERT ERROR:", insertError);
-    res.json({ success: true, data: parsed, raw_response: content });
+    
+    // Process equipment for market rate comparison
+    let totalMarketSavings = 0;
+    const equipmentWithRates = [];
+    
+    if (insertData && parsed.equipment && parsed.equipment.length > 0) {
+      for (const item of parsed.equipment) {
+        if (!item.description || !item.day_rate) continue;
+        
+        try {
+          // Classify the equipment
+          const { data: classifyData } = await supabase.rpc('classify_equipment', {
+            description: item.description
+          });
+          
+          if (classifyData && classifyData.length > 0) {
+            const classified = classifyData[0];
+            
+            // Calculate savings
+            const { data: savingsData } = await supabase.rpc('calculate_savings', {
+              p_equipment_class: classified.equipment_class,
+              p_equipment_size: classified.equipment_size,
+              p_actual_day_rate: item.day_rate,
+              p_rental_days: item.rental_days || 1,
+              p_region: 'Cleveland'
+            });
+            
+            if (savingsData && savingsData.length > 0) {
+              const savings = savingsData[0];
+              totalMarketSavings += parseFloat(savings.total_overpaid) || 0;
+              
+              equipmentWithRates.push({
+                ...item,
+                equipment_class: classified.equipment_class,
+                equipment_size: classified.equipment_size,
+                classification_confidence: classified.confidence,
+                market_rate_low: savings.market_rate_low,
+                market_rate_high: savings.market_rate_high,
+                market_rate_avg: savings.market_rate_avg,
+                overpaid_per_day: savings.overpaid_per_day,
+                total_overpaid: savings.total_overpaid,
+                data_source: savings.data_source
+              });
+              
+              // Insert into equipment_rates table
+              await supabase.from('equipment_rates').insert({
+                invoice_id: insertData.id,
+                user_id: userId || null,
+                equipment_description: item.description,
+                equipment_class: classified.equipment_class,
+                equipment_size: classified.equipment_size,
+                day_rate: item.day_rate,
+                week_rate: item.week_rate || null,
+                four_week_rate: item.four_week_rate || null,
+                rental_days: item.rental_days || 1,
+                vendor_name: parsed.vendor,
+                region: 'Cleveland',
+                invoice_date: parsed.invoice_date
+              });
+            }
+          }
+        } catch (err) {
+          console.log('Error processing equipment item:', err.message);
+        }
+      }
+      
+      // Update invoice with market savings data
+      if (totalMarketSavings > 0) {
+        await supabase.from('parsed_invoices').update({
+          market_savings: totalMarketSavings,
+          equipment_with_rates: equipmentWithRates
+        }).eq('id', insertData.id);
+      }
+    }
+    
+    res.json({ 
+      success: true, 
+      data: {
+        ...parsed,
+        market_savings: totalMarketSavings,
+        equipment_with_rates: equipmentWithRates
+      }, 
+      raw_response: content 
+    });
   } catch (error) {
     console.error('Parse error:', error);
     res.status(500).json({ success: false, error: error.message });
