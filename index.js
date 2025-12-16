@@ -124,31 +124,41 @@ app.post('/parse-base64', async (req, res) => {
           content: [
             {
               type: 'text',
-              text: `You are an invoice parser for construction equipment rentals. Extract the following data from this invoice image and return ONLY valid JSON, no other text.
+              text: `You are an invoice parser for construction equipment rentals. Extract data from this invoice and return ONLY valid JSON.
 
-IMPORTANT FEE CATEGORIZATION RULES:
-- "fees" should ONLY include surcharges and extra charges that are ADD-ONS to services
-- DO NOT include delivery charges, pickup charges, or freight charges in "fees" - these are services, not fees
-- "delivery_pickup_total" should include: delivery charge, pickup charge, freight, hauling - these are SERVICES
+CRITICAL: Look for the SUMMARY BOX at the bottom of the invoice. Herc Rentals invoices have a summary that shows:
+- RENTAL CHARGES (this is rental_subtotal)
+- OTHER CHARGES (this is a FEE - includes misc fees, shop supplies, etc)
+- RENTAL PROTECTION (this is a FEE - insurance/damage waiver)
+- FUEL CHARGES (this is a FEE)
+- DELIVERY/PICK UP (this is NOT a fee - it's a service)
+- TAXABLE CHARGES
+- TAX
+- TOTAL CHARGES
 
-WHAT COUNTS AS A FEE (put in "fees" object):
-- Environmental fee / Enviro disposal fee
+WHAT COUNTS AS A FEE (add to fees object):
+- OTHER CHARGES (from Herc summary box)
+- RENTAL PROTECTION / Insurance / Damage Waiver
+- Environmental fee / Emissions fee
 - Fuel surcharge / Fuel service charge
-- Transportation surcharge (this is a SURCHARGE on delivery, not the delivery itself)
-- Damage waiver / Loss damage waiver
-- Admin fee / Administrative fee
-- Rental protection / Insurance
-- Shop supplies / Misc charges
-- Any line with "surcharge", "fee", "environmental", "fuel" in the name
+- Transportation surcharge (SURCHARGE only, not base delivery)
+- Admin fee
+- Shop supplies
+- Any line item with "surcharge", "fee", "protection", "waiver" in the name
 
-WHAT IS NOT A FEE (put in "delivery_pickup_total"):
-- Delivery charge / Delivery freight
-- Pickup charge / Pick-up freight  
+WHAT IS NOT A FEE (goes in delivery_pickup_total):
+- DELIVERY/PICK UP (from summary box)
+- Delivery charge / Pickup charge
 - Freight / Hauling
-- Transportation (the base charge, not surcharge)
+
+FOR RENTAL_SUBTOTAL:
+- Use "RENTAL CHARGES" from the summary box if available
+- This should be the equipment rental amount BEFORE fees, delivery, and tax
+- Do NOT use TAXABLE CHARGES (that includes fees)
+- Do NOT use TOTAL CHARGES
 
 {
-  "vendor": "Company name",
+  "vendor": "Company name (e.g. Herc Rentals, ADMAR, Sunbelt)",
   "invoice_number": "Invoice number",
   "invoice_date": "YYYY-MM-DD format",
   "po_number": "PO number or null",
@@ -167,18 +177,17 @@ WHAT IS NOT A FEE (put in "delivery_pickup_total"):
   "rental_subtotal": 0.00,
   "delivery_pickup_total": 0.00,
   "fees": {
+    "other_charges": 0.00,
+    "rental_protection": 0.00,
     "environmental": 0.00,
     "fuel_surcharge": 0.00,
-    "transport_surcharge": 0.00,
-    "damage_waiver": 0.00,
-    "other_fees": 0.00
+    "transport_surcharge": 0.00
   },
   "tax": 0.00,
   "total": 0.00,
   "confidence": "high"
 }
 
-Set confidence to "high" if all fields are clearly readable, "medium" if some fields are unclear, "low" if significant parts are unreadable.
 Return ONLY the JSON object, no markdown, no explanation.`
             },
             {
