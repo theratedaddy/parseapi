@@ -25,6 +25,42 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY
 });
 
+// Helper function to calculate what customer likely paid based on rental tier
+function calculateExpectedAmount(dayRate, weekRate, fourWeekRate, rentalDays) {
+  const day = parseFloat(dayRate) || 0;
+  const week = parseFloat(weekRate) || 0;
+  const month = parseFloat(fourWeekRate) || 0;
+  const days = parseInt(rentalDays) || 1;
+  
+  // If we have no rates at all, return 0
+  if (day === 0 && week === 0 && month === 0) {
+    return 0;
+  }
+  
+  // Fill in missing rates with estimates
+  const effectiveDay = day || (week / 5) || (month / 20);
+  const effectiveWeek = week || (day * 5) || (month / 4);
+  const effectiveMonth = month || (week * 4) || (day * 20);
+  
+  // Rental companies charge the LOWEST applicable tier
+  if (days <= 2) {
+    return effectiveDay * days;
+  } else if (days <= 6) {
+    return Math.min(effectiveDay * days, effectiveWeek);
+  } else if (days <= 27) {
+    return Math.min(
+      effectiveDay * days,
+      effectiveWeek * Math.ceil(days / 7),
+      effectiveMonth
+    );
+  } else {
+    return Math.min(
+      effectiveMonth * Math.ceil(days / 28),
+      effectiveWeek * Math.ceil(days / 7)
+    );
+  }
+}
+
 app.get('/', (req, res) => {
   res.json({ status: 'ParseAPI is running' });
 });
@@ -157,7 +193,7 @@ FOR RENTAL_SUBTOTAL:
 - Do NOT use TAXABLE CHARGES (that includes fees)
 - Do NOT use TOTAL CHARGES
 
-FOR EQUIPMENT: Extract day_rate if shown. Also try to estimate rental_days from dates or billing period.
+FOR EQUIPMENT: Extract day_rate, week_rate, four_week_rate if shown. Also extract rental_days from dates or billing period. For amount, extract the extended/total price for each equipment line if shown.
 
 {
   "vendor": "Company name (e.g. Herc Rentals, ADMAR, Sunbelt)",
@@ -264,17 +300,31 @@ Return ONLY the JSON object, no markdown, no explanation.`
     
     if (insertData && parsed.equipment && parsed.equipment.length > 0) {
       for (const item of parsed.equipment) {
-        console.log("Processing item:", item.description, "amount:", item.amount, "rental_days:", item.rental_days);
+        const rentalDays = parseInt(item.rental_days) || 1;
+        
+        // Get actual amount - use parsed amount OR calculate from rates
+        let actualAmount = parseFloat(item.amount) || 0;
+        
+        if (actualAmount === 0) {
+          // Fallback: calculate amount from rates using tier logic
+          actualAmount = calculateExpectedAmount(
+            item.day_rate,
+            item.week_rate,
+            item.four_week_rate,
+            rentalDays
+          );
+          console.log("Calculated amount from rates:", actualAmount, "for", item.description);
+        }
+        
+        console.log("Processing item:", item.description, "amount:", actualAmount, "rental_days:", rentalDays);
         
         if (!item.description) {
           console.log("SKIP: No description");
           continue;
         }
         
-        // Get actual amount paid for this equipment
-        const actualAmount = parseFloat(item.amount) || 0;
         if (actualAmount === 0) {
-          console.log("SKIP: No amount for", item.description);
+          console.log("SKIP: No amount and couldn't calculate from rates for", item.description);
           continue;
         }
         
@@ -292,12 +342,12 @@ Return ONLY the JSON object, no markdown, no explanation.`
             const classified = classifyData[0];
             
             // Calculate savings using actual amount paid
-            console.log("Calling calculate_savings:", classified.equipment_class, classified.equipment_size, actualAmount, item.rental_days || 1);
+            console.log("Calling calculate_savings:", classified.equipment_class, classified.equipment_size, actualAmount, rentalDays);
             const { data: savingsData, error: savingsError } = await supabase.rpc('calculate_savings', {
               p_equipment_class: classified.equipment_class,
               p_equipment_size: classified.equipment_size,
               p_actual_amount: actualAmount,
-              p_rental_days: item.rental_days || 1,
+              p_rental_days: rentalDays,
               p_region: 'Cleveland'
             });
             
@@ -310,6 +360,7 @@ Return ONLY the JSON object, no markdown, no explanation.`
               
               equipmentWithRates.push({
                 ...item,
+                calculated_amount: actualAmount,
                 equipment_class: classified.equipment_class,
                 equipment_size: classified.equipment_size,
                 classification_confidence: classified.confidence,
@@ -331,7 +382,7 @@ Return ONLY the JSON object, no markdown, no explanation.`
                 day_rate: item.day_rate || null,
                 week_rate: item.week_rate || null,
                 four_week_rate: item.four_week_rate || null,
-                rental_days: item.rental_days || 1,
+                rental_days: rentalDays,
                 vendor_name: parsed.vendor,
                 region: 'Cleveland',
                 invoice_date: parsed.invoice_date
