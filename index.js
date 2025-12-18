@@ -287,18 +287,32 @@ Return ONLY the JSON object, no markdown, no explanation.`
       raw_response: parsed || {}
     }).select().single();
     
-    console.log("INSERT DATA:", insertData);
+    console.log("=== INSERT RESULT ===");
+    console.log("INSERT DATA:", JSON.stringify(insertData, null, 2));
     console.log("INSERT ERROR:", insertError);
+    console.log("INSERT ID:", insertData?.id);
+    
+    // BAIL EARLY if insert failed
+    if (insertError || !insertData || !insertData.id) {
+      console.log("!!! INSERT FAILED - cannot proceed with market rate processing !!!");
+      return res.status(500).json({ 
+        success: false, 
+        error: 'Failed to insert invoice', 
+        details: insertError 
+      });
+    }
+    
+    const invoiceId = insertData.id;
+    console.log("Invoice ID confirmed:", invoiceId);
     
     // Process equipment for market rate comparison
     let totalMarketSavings = 0;
     const equipmentWithRates = [];
     
     console.log("=== MARKET RATE PROCESSING START ===");
-    console.log("insertData exists:", !!insertData);
-    console.log("parsed.equipment:", JSON.stringify(parsed.equipment));
+    console.log("Equipment count:", parsed.equipment?.length || 0);
     
-    if (insertData && parsed.equipment && parsed.equipment.length > 0) {
+    if (parsed.equipment && parsed.equipment.length > 0) {
       for (const item of parsed.equipment) {
         const rentalDays = parseInt(item.rental_days) || 1;
         
@@ -374,7 +388,7 @@ Return ONLY the JSON object, no markdown, no explanation.`
               
               // Insert into equipment_rates table
               const { error: ratesError } = await supabase.from('equipment_rates').insert({
-                invoice_id: insertData.id,
+                invoice_id: invoiceId,
                 user_id: userId || null,
                 equipment_description: item.description,
                 equipment_class: classified.equipment_class,
@@ -394,25 +408,45 @@ Return ONLY the JSON object, no markdown, no explanation.`
           console.log('Error processing equipment item:', err.message);
         }
       }
-      
-      console.log("=== MARKET RATE PROCESSING COMPLETE ===");
-      console.log("totalMarketSavings:", totalMarketSavings);
-      console.log("equipmentWithRates count:", equipmentWithRates.length);
-      
-      // Update invoice with market savings data - ALWAYS update if we have equipment with rates
-      if (equipmentWithRates.length > 0) {
-        const { error: updateError } = await supabase.from('parsed_invoices').update({
-          market_savings: totalMarketSavings,
-          equipment_with_rates: equipmentWithRates
-        }).eq('id', insertData.id);
-        console.log("Update market_savings error:", updateError);
-      }
+    }
+    
+    console.log("=== MARKET RATE PROCESSING COMPLETE ===");
+    console.log("totalMarketSavings:", totalMarketSavings);
+    console.log("equipmentWithRates count:", equipmentWithRates.length);
+    
+    // UPDATE invoice with market savings - ALWAYS attempt if we processed equipment
+    console.log("=== UPDATING MARKET_SAVINGS ===");
+    console.log("Invoice ID for update:", invoiceId);
+    console.log("market_savings value:", totalMarketSavings);
+    console.log("equipment_with_rates count:", equipmentWithRates.length);
+    
+    const { data: updateData, error: updateError } = await supabase
+      .from('parsed_invoices')
+      .update({
+        market_savings: totalMarketSavings,
+        equipment_with_rates: equipmentWithRates
+      })
+      .eq('id', invoiceId)
+      .select();
+    
+    console.log("=== UPDATE RESULT ===");
+    console.log("UPDATE DATA:", JSON.stringify(updateData, null, 2));
+    console.log("UPDATE ERROR:", updateError);
+    console.log("ROWS UPDATED:", updateData?.length || 0);
+    
+    if (updateError) {
+      console.log("!!! UPDATE FAILED !!!");
+    } else if (!updateData || updateData.length === 0) {
+      console.log("!!! UPDATE RETURNED NO ROWS - something is wrong !!!");
+    } else {
+      console.log("SUCCESS: market_savings updated to", updateData[0].market_savings);
     }
     
     res.json({ 
       success: true, 
       data: {
         ...parsed,
+        id: invoiceId,
         market_savings: totalMarketSavings,
         equipment_with_rates: equipmentWithRates
       }, 
