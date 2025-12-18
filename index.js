@@ -258,27 +258,56 @@ Return ONLY the JSON object, no markdown, no explanation.`
     let totalMarketSavings = 0;
     const equipmentWithRates = [];
     
+    console.log("=== MARKET RATE PROCESSING START ===");
+    console.log("insertData exists:", !!insertData);
+    console.log("parsed.equipment:", JSON.stringify(parsed.equipment));
+    
     if (insertData && parsed.equipment && parsed.equipment.length > 0) {
       for (const item of parsed.equipment) {
-        if (!item.description) continue;
+        console.log("Processing item:", item.description, "day_rate:", item.day_rate);
+        
+        if (!item.description) {
+          console.log("SKIP: No description");
+          continue;
+        }
         
         try {
           // Classify the equipment
-          const { data: classifyData } = await supabase.rpc('classify_equipment', {
+          console.log("Calling classify_equipment for:", item.description);
+          const { data: classifyData, error: classifyError } = await supabase.rpc('classify_equipment', {
             p_description: item.description
           });
+          
+          console.log("classify_equipment result:", JSON.stringify(classifyData));
+          console.log("classify_equipment error:", classifyError);
           
           if (classifyData && classifyData.length > 0) {
             const classified = classifyData[0];
             
+            // Use day_rate if available, otherwise estimate from amount/rental_days
+            let dayRate = parseFloat(item.day_rate) || 0;
+            if (dayRate === 0 && item.amount && item.rental_days) {
+              dayRate = parseFloat(item.amount) / parseInt(item.rental_days);
+              console.log("Estimated day_rate from amount/days:", dayRate);
+            }
+            
+            if (dayRate === 0) {
+              console.log("SKIP: No day_rate available for", item.description);
+              continue;
+            }
+            
             // Calculate savings
-            const { data: savingsData } = await supabase.rpc('calculate_savings', {
+            console.log("Calling calculate_savings:", classified.equipment_class, classified.equipment_size, dayRate);
+            const { data: savingsData, error: savingsError } = await supabase.rpc('calculate_savings', {
               p_equipment_class: classified.equipment_class,
               p_equipment_size: classified.equipment_size,
-              p_actual_day_rate: item.day_rate,
+              p_actual_day_rate: dayRate,
               p_rental_days: item.rental_days || 1,
               p_region: 'Cleveland'
             });
+            
+            console.log("calculate_savings result:", JSON.stringify(savingsData));
+            console.log("calculate_savings error:", savingsError);
             
             if (savingsData && savingsData.length > 0) {
               const savings = savingsData[0];
@@ -298,13 +327,13 @@ Return ONLY the JSON object, no markdown, no explanation.`
               });
               
               // Insert into equipment_rates table
-              await supabase.from('equipment_rates').insert({
+              const { error: ratesError } = await supabase.from('equipment_rates').insert({
                 invoice_id: insertData.id,
                 user_id: userId || null,
-                equipment_p_description: item.description,
+                equipment_description: item.description,
                 equipment_class: classified.equipment_class,
                 equipment_size: classified.equipment_size,
-                day_rate: item.day_rate,
+                day_rate: dayRate,
                 week_rate: item.week_rate || null,
                 four_week_rate: item.four_week_rate || null,
                 rental_days: item.rental_days || 1,
@@ -312,6 +341,7 @@ Return ONLY the JSON object, no markdown, no explanation.`
                 region: 'Cleveland',
                 invoice_date: parsed.invoice_date
               });
+              console.log("equipment_rates insert error:", ratesError);
             }
           }
         } catch (err) {
@@ -319,12 +349,17 @@ Return ONLY the JSON object, no markdown, no explanation.`
         }
       }
       
-      // Update invoice with market savings data
-      if (totalMarketSavings > 0) {
-        await supabase.from('parsed_invoices').update({
+      console.log("=== MARKET RATE PROCESSING COMPLETE ===");
+      console.log("totalMarketSavings:", totalMarketSavings);
+      console.log("equipmentWithRates count:", equipmentWithRates.length);
+      
+      // Update invoice with market savings data - ALWAYS update if we have equipment with rates
+      if (equipmentWithRates.length > 0) {
+        const { error: updateError } = await supabase.from('parsed_invoices').update({
           market_savings: totalMarketSavings,
           equipment_with_rates: equipmentWithRates
         }).eq('id', insertData.id);
+        console.log("Update market_savings error:", updateError);
       }
     }
     
