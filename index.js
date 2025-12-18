@@ -264,10 +264,17 @@ Return ONLY the JSON object, no markdown, no explanation.`
     
     if (insertData && parsed.equipment && parsed.equipment.length > 0) {
       for (const item of parsed.equipment) {
-        console.log("Processing item:", item.description, "day_rate:", item.day_rate);
+        console.log("Processing item:", item.description, "amount:", item.amount, "rental_days:", item.rental_days);
         
         if (!item.description) {
           console.log("SKIP: No description");
+          continue;
+        }
+        
+        // Get actual amount paid for this equipment
+        const actualAmount = parseFloat(item.amount) || 0;
+        if (actualAmount === 0) {
+          console.log("SKIP: No amount for", item.description);
           continue;
         }
         
@@ -284,24 +291,12 @@ Return ONLY the JSON object, no markdown, no explanation.`
           if (classifyData && classifyData.length > 0) {
             const classified = classifyData[0];
             
-            // Use day_rate if available, otherwise estimate from amount/rental_days
-            let dayRate = parseFloat(item.day_rate) || 0;
-            if (dayRate === 0 && item.amount && item.rental_days) {
-              dayRate = parseFloat(item.amount) / parseInt(item.rental_days);
-              console.log("Estimated day_rate from amount/days:", dayRate);
-            }
-            
-            if (dayRate === 0) {
-              console.log("SKIP: No day_rate available for", item.description);
-              continue;
-            }
-            
-            // Calculate savings
-            console.log("Calling calculate_savings:", classified.equipment_class, classified.equipment_size, dayRate);
+            // Calculate savings using actual amount paid
+            console.log("Calling calculate_savings:", classified.equipment_class, classified.equipment_size, actualAmount, item.rental_days || 1);
             const { data: savingsData, error: savingsError } = await supabase.rpc('calculate_savings', {
               p_equipment_class: classified.equipment_class,
               p_equipment_size: classified.equipment_size,
-              p_actual_day_rate: dayRate,
+              p_actual_amount: actualAmount,
               p_rental_days: item.rental_days || 1,
               p_region: 'Cleveland'
             });
@@ -333,7 +328,7 @@ Return ONLY the JSON object, no markdown, no explanation.`
                 equipment_description: item.description,
                 equipment_class: classified.equipment_class,
                 equipment_size: classified.equipment_size,
-                day_rate: dayRate,
+                day_rate: item.day_rate || null,
                 week_rate: item.week_rate || null,
                 four_week_rate: item.four_week_rate || null,
                 rental_days: item.rental_days || 1,
