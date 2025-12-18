@@ -260,7 +260,7 @@ Return ONLY the JSON object, no markdown, no explanation.`
     
     if (insertData && parsed.equipment && parsed.equipment.length > 0) {
       for (const item of parsed.equipment) {
-        if (!item.description || !item.day_rate) continue;
+        if (!item.description) continue;
         
         try {
           // Classify the equipment
