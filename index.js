@@ -25,24 +25,20 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY
 });
 
-// Helper function to calculate what customer likely paid based on rental tier
 function calculateExpectedAmount(dayRate, weekRate, fourWeekRate, rentalDays) {
   const day = parseFloat(dayRate) || 0;
   const week = parseFloat(weekRate) || 0;
   const month = parseFloat(fourWeekRate) || 0;
   const days = parseInt(rentalDays) || 1;
   
-  // If we have no rates at all, return 0
   if (day === 0 && week === 0 && month === 0) {
     return 0;
   }
   
-  // Fill in missing rates with estimates
   const effectiveDay = day || (week / 5) || (month / 20);
   const effectiveWeek = week || (day * 5) || (month / 4);
   const effectiveMonth = month || (week * 4) || (day * 20);
   
-  // Rental companies charge the LOWEST applicable tier
   if (days <= 2) {
     return effectiveDay * days;
   } else if (days <= 6) {
@@ -162,41 +158,37 @@ app.post('/parse-base64', async (req, res) => {
               type: 'text',
               text: `You are an invoice parser for construction equipment rentals. Extract data from this invoice and return ONLY valid JSON.
 
-CRITICAL: Look for the SUMMARY BOX at the bottom of the invoice. Herc Rentals invoices have a summary that shows:
-- RENTAL CHARGES (this is rental_subtotal)
-- OTHER CHARGES (this is a FEE - includes misc fees, shop supplies, etc)
-- RENTAL PROTECTION (this is a FEE - insurance/damage waiver)
-- FUEL CHARGES (this is a FEE)
-- DELIVERY/PICK UP (this is NOT a fee - it's a service)
-- TAXABLE CHARGES
-- TAX
-- TOTAL CHARGES
+CRITICAL RULES FOR FEES:
+1. NEVER count Delivery or Pickup as a fee - these are legitimate services
+2. NEVER double-count: If you see "Other Charges" as a subtotal, DO NOT also add the individual line items that make up that subtotal
+3. Only count these as fees:
+   - Trans Srvc Surcharge / Transportation Surcharge
+   - Emissions & Env Surcharge / Environmental fee
+   - Fuel surcharge (NOT fuel/propane refill - that's a service)
+   - Admin fee
+   - Rental Protection / Damage Waiver / LDW
+   - Shop supplies fee
+   - Any line with "surcharge" or "fee" in the name (EXCEPT delivery/pickup fees)
 
-WHAT COUNTS AS A FEE (add to fees object):
-- OTHER CHARGES (from Herc summary box)
-- RENTAL PROTECTION / Insurance / Damage Waiver
-- Environmental fee / Emissions fee
-- Fuel surcharge / Fuel service charge
-- Transportation surcharge (SURCHARGE only, not base delivery)
-- Admin fee
-- Shop supplies
-- Any line item with "surcharge", "fee", "protection", "waiver" in the name
-
-WHAT IS NOT A FEE (goes in delivery_pickup_total):
-- DELIVERY/PICK UP (from summary box)
-- Delivery charge / Pickup charge
+WHAT IS NOT A FEE (put in delivery_pickup_total, not fees):
+- Delivery charge / Delivery
+- Pickup charge / Pick up
 - Freight / Hauling
+- Any delivery/pickup related charge
+
+FOR FEES TOTAL:
+- Add up ONLY the individual fee line items (surcharges, environmental, etc)
+- Do NOT use "Other Charges" if it's a subtotal of fees you already counted
+- If you can only see "Other Charges" as a lump sum without itemized fees above it, then use that
 
 FOR RENTAL_SUBTOTAL:
 - Use "RENTAL CHARGES" from the summary box if available
-- This should be the equipment rental amount BEFORE fees, delivery, and tax
-- Do NOT use TAXABLE CHARGES (that includes fees)
-- Do NOT use TOTAL CHARGES
+- This is the equipment rental amount BEFORE fees, delivery, and tax
 
-FOR EQUIPMENT: Extract day_rate, week_rate, four_week_rate if shown. Also extract rental_days from dates or billing period. For amount, extract the extended/total price for each equipment line if shown.
+FOR EQUIPMENT: Extract day_rate, week_rate, four_week_rate if shown. Also extract rental_days from dates or billing period.
 
 {
-  "vendor": "Company name (e.g. Herc Rentals, ADMAR, Sunbelt)",
+  "vendor": "Company name",
   "invoice_number": "Invoice number",
   "invoice_date": "YYYY-MM-DD format",
   "po_number": "PO number or null",
@@ -216,11 +208,12 @@ FOR EQUIPMENT: Extract day_rate, week_rate, four_week_rate if shown. Also extrac
   "rental_subtotal": 0.00,
   "delivery_pickup_total": 0.00,
   "fees": {
-    "other_charges": 0.00,
-    "rental_protection": 0.00,
+    "transport_surcharge": 0.00,
     "environmental": 0.00,
     "fuel_surcharge": 0.00,
-    "transport_surcharge": 0.00
+    "rental_protection": 0.00,
+    "admin_fee": 0.00,
+    "other": 0.00
   },
   "tax": 0.00,
   "total": 0.00,
@@ -253,7 +246,6 @@ Return ONLY the JSON object, no markdown, no explanation.`
       }
     }
     
-    // Calculate fees total (excluding delivery/pickup which are services)
     const feesTotal = parsed.fees ? Object.values(parsed.fees).reduce((sum, f) => sum + (parseFloat(f) || 0), 0) : 0;
     const rentalSubtotal = parseFloat(parsed.rental_subtotal) || 0;
     const feePercentage = rentalSubtotal > 0 ? (feesTotal / rentalSubtotal) * 100 : 0;
@@ -262,7 +254,6 @@ Return ONLY the JSON object, no markdown, no explanation.`
     const vendorLower = (parsed.vendor || '').toLowerCase();
     const isRental = rentalKeywords.some(kw => vendorLower.includes(kw));
     
-    // Insert invoice first to get the ID
     const { data: insertData, error: insertError } = await supabase.from('parsed_invoices').insert({
       source: 'parseapi',
       app_source: 'rate_daddy',
@@ -292,7 +283,6 @@ Return ONLY the JSON object, no markdown, no explanation.`
     console.log("INSERT ERROR:", insertError);
     console.log("INSERT ID:", insertData?.id);
     
-    // BAIL EARLY if insert failed
     if (insertError || !insertData || !insertData.id) {
       console.log("!!! INSERT FAILED - cannot proceed with market rate processing !!!");
       return res.status(500).json({ 
@@ -305,7 +295,6 @@ Return ONLY the JSON object, no markdown, no explanation.`
     const invoiceId = insertData.id;
     console.log("Invoice ID confirmed:", invoiceId);
     
-    // Process equipment for market rate comparison
     let totalMarketSavings = 0;
     const equipmentWithRates = [];
     
@@ -316,11 +305,9 @@ Return ONLY the JSON object, no markdown, no explanation.`
       for (const item of parsed.equipment) {
         const rentalDays = parseInt(item.rental_days) || 1;
         
-        // Get actual amount - use parsed amount OR calculate from rates
         let actualAmount = parseFloat(item.amount) || 0;
         
         if (actualAmount === 0) {
-          // Fallback: calculate amount from rates using tier logic
           actualAmount = calculateExpectedAmount(
             item.day_rate,
             item.week_rate,
@@ -343,7 +330,6 @@ Return ONLY the JSON object, no markdown, no explanation.`
         }
         
         try {
-          // Classify the equipment
           console.log("Calling classify_equipment for:", item.description);
           const { data: classifyData, error: classifyError } = await supabase.rpc('classify_equipment', {
             p_description: item.description
@@ -355,7 +341,6 @@ Return ONLY the JSON object, no markdown, no explanation.`
           if (classifyData && classifyData.length > 0) {
             const classified = classifyData[0];
             
-            // Calculate savings using actual amount paid
             console.log("Calling calculate_savings:", classified.equipment_class, classified.equipment_size, actualAmount, rentalDays);
             const { data: savingsData, error: savingsError } = await supabase.rpc('calculate_savings', {
               p_equipment_class: classified.equipment_class,
@@ -386,7 +371,6 @@ Return ONLY the JSON object, no markdown, no explanation.`
                 data_source: savings.data_source
               });
               
-              // Insert into equipment_rates table
               const { error: ratesError } = await supabase.from('equipment_rates').insert({
                 invoice_id: invoiceId,
                 user_id: userId || null,
@@ -414,7 +398,6 @@ Return ONLY the JSON object, no markdown, no explanation.`
     console.log("totalMarketSavings:", totalMarketSavings);
     console.log("equipmentWithRates count:", equipmentWithRates.length);
     
-    // UPDATE invoice with market savings - ALWAYS attempt if we processed equipment
     console.log("=== UPDATING MARKET_SAVINGS ===");
     console.log("Invoice ID for update:", invoiceId);
     console.log("market_savings value:", totalMarketSavings);
