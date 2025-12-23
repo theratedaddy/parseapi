@@ -163,7 +163,7 @@ CRITICAL RULES FOR FEES:
 2. NEVER double-count: If you see "Other Charges" as a subtotal, DO NOT also add the individual line items that make up that subtotal
 3. Only count these as fees:
    - Trans Srvc Surcharge / Transportation Surcharge
-   - Emissions & Env Surcharge / Environmental fee
+   - Emissions & Env Surcharge / Environmental fee / Environmental Levy
    - Fuel surcharge (NOT fuel/propane refill - that's a service)
    - Admin fee
    - Rental Protection / Damage Waiver / LDW
@@ -181,9 +181,19 @@ FOR FEES TOTAL:
 - Do NOT use "Other Charges" if it's a subtotal of fees you already counted
 - If you can only see "Other Charges" as a lump sum without itemized fees above it, then use that
 
-FOR RENTAL_SUBTOTAL:
-- Use "RENTAL CHARGES" from the summary box if available
-- This is the equipment rental amount BEFORE fees, delivery, and tax
+FOR RENTAL_SUBTOTAL - THIS IS CRITICAL:
+- rental_subtotal is ONLY the sum of actual equipment rental line items (machines, lifts, excavators, etc.)
+- DO NOT use the invoice's printed "Sub Total" or "Subtotal" line - that often includes fees baked in
+- DO NOT include Damage Waiver, Rental Protection, LDW - these go in fees.rental_protection
+- DO NOT include Environmental Levy/Fee - these go in fees.environmental
+- DO NOT include any surcharges - these go in fees
+- ONLY sum the equipment rental amounts themselves
+- Example: If invoice shows "19ft Scissor Lift $730" + "Damage Waiver $87.60" + "Environmental $36.50" = Sub Total $854.10
+  - rental_subtotal should be 730.00 (just the lift)
+  - fees.rental_protection should be 87.60
+  - fees.environmental should be 36.50
+  - DO NOT set rental_subtotal to 854.10
+- When in doubt: rental_subtotal = total - tax - all fees - delivery/pickup
 
 FOR EQUIPMENT: Extract day_rate, week_rate, four_week_rate if shown. Also extract rental_days from dates or billing period.
 
