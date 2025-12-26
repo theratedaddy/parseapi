@@ -158,42 +158,33 @@ app.post('/parse-base64', async (req, res) => {
               type: 'text',
               text: `You are an invoice parser for construction equipment rentals. Extract data from this invoice and return ONLY valid JSON.
 
-CRITICAL RULES FOR FEES:
-1. NEVER count Delivery or Pickup as a fee - these are legitimate services
-2. NEVER double-count: If you see "Other Charges" as a subtotal, DO NOT also add the individual line items that make up that subtotal
-3. Only count these as fees:
-   - Trans Srvc Surcharge / Transportation Surcharge
-   - Emissions & Env Surcharge / Environmental fee / Environmental Levy
-   - Fuel surcharge (NOT fuel/propane refill - that's a service)
-   - Admin fee
-   - Rental Protection / Damage Waiver / LDW
-   - Shop supplies fee
-   - Any line with "surcharge" or "fee" in the name (EXCEPT delivery/pickup fees)
+CRITICAL: SEPARATE FREIGHT FROM FEES
 
-WHAT IS NOT A FEE (put in delivery_pickup_total, not fees):
+FREIGHT (goes in "freight" field):
 - Delivery charge / Delivery
-- Pickup charge / Pick up
+- Pickup charge / Pick up  
+- Delivery & Pickup combined
 - Freight / Hauling
-- Any delivery/pickup related charge
+- Transportation (when it means delivery, not a surcharge)
+- Any charge for physically moving equipment to/from job site
 
-FOR FEES TOTAL:
-- Add up ONLY the individual fee line items (surcharges, environmental, etc)
-- Do NOT use "Other Charges" if it's a subtotal of fees you already counted
-- If you can only see "Other Charges" as a lump sum without itemized fees above it, then use that
+FEES (goes in "fees" object) - these are the charges we want to track and flag:
+- Damage Waiver / Rental Protection / LDW / Physical Damage Waiver
+- Trans Srvc Surcharge / Transportation Surcharge (NOT delivery - this is a % surcharge)
+- Emissions & Env Surcharge / Environmental fee / Environmental Levy
+- Fuel surcharge (NOT fuel/propane refill - that's a service)
+- Admin fee
+- Shop supplies fee
+- Any line with "surcharge" or "fee" in the name (EXCEPT delivery/pickup fees)
 
 FOR RENTAL_SUBTOTAL - THIS IS CRITICAL:
-- rental_subtotal is ONLY the sum of actual equipment rental line items (machines, lifts, excavators, etc.)
+- rental_subtotal is ONLY the sum of actual equipment rental line items (machines, lifts, excavators, heaters, etc.)
 - DO NOT use the invoice's printed "Sub Total" or "Subtotal" line - that often includes fees baked in
 - DO NOT include Damage Waiver, Rental Protection, LDW - these go in fees.rental_protection
 - DO NOT include Environmental Levy/Fee - these go in fees.environmental
 - DO NOT include any surcharges - these go in fees
 - ONLY sum the equipment rental amounts themselves
-- Example: If invoice shows "19ft Scissor Lift $730" + "Damage Waiver $87.60" + "Environmental $36.50" = Sub Total $854.10
-  - rental_subtotal should be 730.00 (just the lift)
-  - fees.rental_protection should be 87.60
-  - fees.environmental should be 36.50
-  - DO NOT set rental_subtotal to 854.10
-- When in doubt: rental_subtotal = total - tax - all fees - delivery/pickup
+- When in doubt: rental_subtotal = total - tax - all fees - freight
 
 FOR EQUIPMENT: Extract day_rate, week_rate, four_week_rate if shown. Also extract rental_days from dates or billing period.
 
@@ -216,7 +207,7 @@ FOR EQUIPMENT: Extract day_rate, week_rate, four_week_rate if shown. Also extrac
     }
   ],
   "rental_subtotal": 0.00,
-  "delivery_pickup_total": 0.00,
+  "freight": 0.00,
   "fees": {
     "transport_surcharge": 0.00,
     "environmental": 0.00,
@@ -258,9 +249,10 @@ Return ONLY the JSON object, no markdown, no explanation.`
     
     const feesTotal = parsed.fees ? Object.values(parsed.fees).reduce((sum, f) => sum + (parseFloat(f) || 0), 0) : 0;
     const rentalSubtotal = parseFloat(parsed.rental_subtotal) || 0;
+    const freight = parseFloat(parsed.freight) || parseFloat(parsed.delivery_pickup_total) || 0;
     const feePercentage = rentalSubtotal > 0 ? (feesTotal / rentalSubtotal) * 100 : 0;
     
-    const rentalKeywords = ['herc', 'sunbelt', 'united rentals', 'ohio cat', 'admar', 'skyworks', 'caterpillar', 'rental'];
+    const rentalKeywords = ['herc', 'sunbelt', 'united rentals', 'ohio cat', 'admar', 'skyworks', 'caterpillar', 'rental', 'leppo'];
     const vendorLower = (parsed.vendor || '').toLowerCase();
     const isRental = rentalKeywords.some(kw => vendorLower.includes(kw));
     
@@ -278,6 +270,7 @@ Return ONLY the JSON object, no markdown, no explanation.`
       customer_name: parsed.customer_name || null,
       job_site: parsed.job_site || null,
       rental_subtotal: rentalSubtotal || null,
+      freight: freight || null,
       fees_total: feesTotal || null,
       tax: parseFloat(parsed.tax) || null,
       total: parseFloat(parsed.total) || null,
@@ -440,6 +433,9 @@ Return ONLY the JSON object, no markdown, no explanation.`
       data: {
         ...parsed,
         id: invoiceId,
+        freight: freight,
+        fees_total: feesTotal,
+        fee_percentage: feePercentage,
         market_savings: totalMarketSavings,
         equipment_with_rates: equipmentWithRates
       }, 
