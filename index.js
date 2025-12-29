@@ -158,47 +158,42 @@ app.post('/parse-base64', async (req, res) => {
               type: 'text',
               text: `You are an invoice parser for construction equipment rentals. Extract data from this invoice and return ONLY valid JSON.
 
-CRITICAL: SEPARATE FREIGHT FROM FEES
+CRITICAL FREIGHT EXTRACTION - LOOK FOR THESE EXACT LINE ITEMS ON HERC INVOICES:
 
-FREIGHT (goes in "freight" field):
-- Delivery charge / Delivery
-- Pickup charge / Pick up  
-- Delivery & Pickup combined
-- Freight / Hauling
-- Transportation (when it means delivery, not a surcharge)
-- Any charge for physically moving equipment to/from job site
+FREIGHT charges (put the SUM of all these in "freight" field):
+- "DELIVERY/PICK UP" or "DELIVERY/PICKUP" - THIS IS FREIGHT
+- "OUTSIDE FREIGHT DELIVERY" - THIS IS FREIGHT  
+- "OUTSIDE FREIGHT PICKUP" - THIS IS FREIGHT
+- "DELIVERY" by itself - THIS IS FREIGHT
+- "PICKUP" or "PICK UP" by itself - THIS IS FREIGHT
+- "HAULING" - THIS IS FREIGHT
+- "MOBILIZATION" / "DEMOBILIZATION" - THIS IS FREIGHT
+- Look in the itemized charges section for these line items and ADD THEM UP
 
-FEES (goes in "fees" object) - these are the charges we want to track and flag:
-- Damage Waiver / Rental Protection / LDW / Physical Damage Waiver
-- Trans Srvc Surcharge / Transportation Surcharge (NOT delivery - this is a % surcharge)
-- Emissions & Env Surcharge / Environmental fee / Environmental Levy
-- Fuel surcharge (NOT fuel/propane refill - that's a service)
-- Admin fee
-- Shop supplies fee
-- Any line with "surcharge" or "fee" in the name (EXCEPT delivery/pickup fees)
+FEES (put in "fees" object - these are surcharges, not physical delivery):
+- "TRANS SRVC SURCHARGE" or "TRANS SERVICE SURCHARGE" → fees.transport_surcharge
+- "ENVIRONMENTAL" or "ENV SURCHARGE" or "EMISSIONS" → fees.environmental  
+- "DAMAGE WAIVER" or "LDW" or "RENTAL PROTECTION" → fees.rental_protection
+- "FUEL SURCHARGE" (not fuel refill) → fees.fuel_surcharge
+- "ADMIN FEE" → fees.admin_fee
+- Any other surcharge → fees.other
 
-FOR RENTAL_SUBTOTAL - THIS IS CRITICAL:
-- rental_subtotal is ONLY the sum of actual equipment rental line items (machines, lifts, excavators, heaters, etc.)
-- DO NOT use the invoice's printed "Sub Total" or "Subtotal" line - that often includes fees baked in
-- DO NOT include Damage Waiver, Rental Protection, LDW - these go in fees.rental_protection
-- DO NOT include Environmental Levy/Fee - these go in fees.environmental
-- DO NOT include any surcharges - these go in fees
-- ONLY sum the equipment rental amounts themselves
-- When in doubt: rental_subtotal = total - tax - all fees - freight
-
-FOR EQUIPMENT: Extract day_rate, week_rate, four_week_rate if shown. Also extract rental_days from dates or billing period.
+RENTAL_SUBTOTAL:
+- Sum ONLY equipment rental line items (the machines/lifts/tools)
+- Look for "RENTAL CHARGES" line if shown
+- DO NOT include fees, freight, tax, or damage waiver
 
 {
   "vendor": "Company name",
   "invoice_number": "Invoice number",
-  "invoice_date": "YYYY-MM-DD format",
+  "invoice_date": "YYYY-MM-DD",
   "po_number": "PO number or null",
-  "customer_name": "Customer/Bill to name",
+  "customer_name": "Bill to name",
   "job_site": "Job site address or null",
   "equipment": [
     {
-      "description": "Equipment description",
-      "serial_number": "Serial number or null",
+      "description": "Equipment name",
+      "serial_number": "Serial or null",
       "day_rate": 0.00,
       "week_rate": 0.00,
       "four_week_rate": 0.00,
@@ -221,7 +216,7 @@ FOR EQUIPMENT: Extract day_rate, week_rate, four_week_rate if shown. Also extrac
   "confidence": "high"
 }
 
-Return ONLY the JSON object, no markdown, no explanation.`
+Return ONLY the JSON, no markdown.`
             },
             {
               type: 'image_url',
