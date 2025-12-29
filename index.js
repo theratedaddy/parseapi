@@ -246,9 +246,30 @@ Return ONLY the JSON, no markdown.`
       }
     }
     
-    const feesTotal = parsed.fees ? Object.values(parsed.fees).reduce((sum, f) => sum + (parseFloat(f) || 0), 0) : 0;
     const rentalSubtotal = parseFloat(parsed.rental_subtotal) || 0;
-    const freight = parseFloat(parsed.freight) || 0;
+    
+    // Extract freight from fees if OpenAI missed it
+    const freightKeywords = ['delivery', 'pickup', 'pick up', 'freight', 'hauling', 'mobilization', 'demobilization'];
+    let extractedFreight = parseFloat(parsed.freight) || 0;
+    let remainingFees = {};
+    
+    if (parsed.fees && typeof parsed.fees === 'object') {
+      for (const [feeName, feeAmount] of Object.entries(parsed.fees)) {
+        const lowerName = feeName.toLowerCase();
+        const amount = parseFloat(feeAmount) || 0;
+        const isFreight = freightKeywords.some(kw => lowerName.includes(kw));
+        
+        if (isFreight && amount > 0) {
+          extractedFreight += amount;
+          console.log("FOUND FREIGHT IN FEES:", feeName, amount);
+        } else {
+          remainingFees[feeName] = feeAmount;
+        }
+      }
+    }
+    
+    const freight = extractedFreight;
+    const feesTotal = Object.values(remainingFees).reduce((sum, f) => sum + (parseFloat(f) || 0), 0);
     const feePercentage = rentalSubtotal > 0 ? (feesTotal / rentalSubtotal) * 100 : 0;
     
     console.log("=== PARSED VALUES ===");
