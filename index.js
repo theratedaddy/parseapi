@@ -229,7 +229,9 @@ Return ONLY the JSON, no markdown.`
       ],
       max_tokens: 2000
     });
-    const content = response.choices[0].message.content;
+    console.log("=== RAW OPENAI RESPONSE ===");
+    console.log(content);
+    console.log("=== END RAW RESPONSE ===");
     let parsed;
     try {
       parsed = JSON.parse(content);
