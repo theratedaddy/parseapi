@@ -158,30 +158,29 @@ app.post('/parse-base64', async (req, res) => {
               type: 'text',
               text: `You are an invoice parser for construction equipment rentals. Extract data from this invoice and return ONLY valid JSON.
 
-CRITICAL FREIGHT EXTRACTION - LOOK FOR THESE EXACT LINE ITEMS ON HERC INVOICES:
+IMPORTANT - FREIGHT EXTRACTION:
+Look for these line items in the SALES ITEMS section or anywhere on the invoice. These are FREIGHT charges - ADD THEM UP and put the total in the "freight" field:
+- DELIVERY/PICK UP
+- DELIVERY/PICKUP  
+- OUTSIDE FREIGHT DELIVERY
+- OUTSIDE FREIGHT PICKUP
+- DELIVERY (by itself)
+- PICKUP or PICK UP (by itself)
+- HAULING
+- MOBILIZATION
+- DEMOBILIZATION
 
-FREIGHT charges (put the SUM of all these in "freight" field):
-- "DELIVERY/PICK UP" or "DELIVERY/PICKUP" - THIS IS FREIGHT
-- "OUTSIDE FREIGHT DELIVERY" - THIS IS FREIGHT  
-- "OUTSIDE FREIGHT PICKUP" - THIS IS FREIGHT
-- "DELIVERY" by itself - THIS IS FREIGHT
-- "PICKUP" or "PICK UP" by itself - THIS IS FREIGHT
-- "HAULING" - THIS IS FREIGHT
-- "MOBILIZATION" / "DEMOBILIZATION" - THIS IS FREIGHT
-- Look in the itemized charges section for these line items and ADD THEM UP
-
-FEES (put in "fees" object - these are surcharges, not physical delivery):
-- "TRANS SRVC SURCHARGE" or "TRANS SERVICE SURCHARGE" → fees.transport_surcharge
-- "ENVIRONMENTAL" or "ENV SURCHARGE" or "EMISSIONS" → fees.environmental  
-- "DAMAGE WAIVER" or "LDW" or "RENTAL PROTECTION" → fees.rental_protection
-- "FUEL SURCHARGE" (not fuel refill) → fees.fuel_surcharge
-- "ADMIN FEE" → fees.admin_fee
+FEES (put in "fees" object - these are surcharges, NOT freight):
+- TRANS SRVC SURCHARGE → fees.transport_surcharge
+- ENVIRONMENTAL or ENV SURCHARGE → fees.environmental  
+- DAMAGE WAIVER or LDW or RENTAL PROTECTION → fees.rental_protection
+- FUEL SURCHARGE → fees.fuel_surcharge
+- ADMIN FEE → fees.admin_fee
 - Any other surcharge → fees.other
 
 RENTAL_SUBTOTAL:
-- Sum ONLY equipment rental line items (the machines/lifts/tools)
-- Look for "RENTAL CHARGES" line if shown
-- DO NOT include fees, freight, tax, or damage waiver
+- Sum ONLY the equipment rental line items
+- DO NOT include fees, freight, or tax
 
 {
   "vendor": "Company name",
@@ -229,9 +228,12 @@ Return ONLY the JSON, no markdown.`
       ],
       max_tokens: 2000
     });
+    
+    const content = response.choices[0].message.content;
     console.log("=== RAW OPENAI RESPONSE ===");
     console.log(content);
     console.log("=== END RAW RESPONSE ===");
+    
     let parsed;
     try {
       parsed = JSON.parse(content);
@@ -246,8 +248,13 @@ Return ONLY the JSON, no markdown.`
     
     const feesTotal = parsed.fees ? Object.values(parsed.fees).reduce((sum, f) => sum + (parseFloat(f) || 0), 0) : 0;
     const rentalSubtotal = parseFloat(parsed.rental_subtotal) || 0;
-    const freight = parseFloat(parsed.freight) || parseFloat(parsed.delivery_pickup_total) || 0;
+    const freight = parseFloat(parsed.freight) || 0;
     const feePercentage = rentalSubtotal > 0 ? (feesTotal / rentalSubtotal) * 100 : 0;
+    
+    console.log("=== PARSED VALUES ===");
+    console.log("freight:", freight);
+    console.log("feesTotal:", feesTotal);
+    console.log("rentalSubtotal:", rentalSubtotal);
     
     const rentalKeywords = ['herc', 'sunbelt', 'united rentals', 'ohio cat', 'admar', 'skyworks', 'caterpillar', 'rental', 'leppo'];
     const vendorLower = (parsed.vendor || '').toLowerCase();
@@ -443,7 +450,6 @@ Return ONLY the JSON, no markdown.`
     res.status(500).json({ success: false, error: error.message });
   }
 });
-
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
   console.log(`ParseAPI running on port ${PORT}`);
