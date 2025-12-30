@@ -25,6 +25,8 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY
 });
 
+const RATE_DADDY_ASSISTANT_ID = 'asst_R55kgv1l6zAQsmuCgYCDpj8k';
+
 function calculateExpectedAmount(dayRate, weekRate, fourWeekRate, rentalDays) {
   const day = parseFloat(dayRate) || 0;
   const week = parseFloat(weekRate) || 0;
@@ -84,6 +86,289 @@ app.get('/test-db', async (req, res) => {
     res.status(500).json({ success: false, error: err.message });
   }
 });
+
+// ==========================================
+// CHAT ENDPOINT - Rate Daddy AI Assistant
+// ==========================================
+
+app.post('/chat', async (req, res) => {
+  try {
+    const { message, threadId, userId, isLoggedIn } = req.body;
+
+    if (!message) {
+      return res.status(400).json({ error: 'No message provided' });
+    }
+
+    console.log('[/chat] Message:', message);
+    console.log('[/chat] Thread:', threadId || 'new');
+    console.log('[/chat] User:', userId || 'anonymous');
+    console.log('[/chat] Logged in:', isLoggedIn);
+
+    // Create or use existing thread
+    let thread;
+    if (threadId) {
+      thread = { id: threadId };
+    } else {
+      thread = await openai.beta.threads.create();
+      console.log('[/chat] Created new thread:', thread.id);
+    }
+
+    // Build context message for the assistant
+    const contextPrefix = isLoggedIn 
+      ? `[SYSTEM CONTEXT: User is logged in. user_id: ${userId}. Dashboard mode - full access to their invoices.]\n\n`
+      : `[SYSTEM CONTEXT: User is NOT logged in. Landing page mode - general questions only, no invoice history access.]\n\n`;
+
+    // Add user message to thread
+    await openai.beta.threads.messages.create(thread.id, {
+      role: 'user',
+      content: contextPrefix + message
+    });
+
+    // Run the assistant
+    const run = await openai.beta.threads.runs.create(thread.id, {
+      assistant_id: RATE_DADDY_ASSISTANT_ID
+    });
+
+    // Poll for completion
+    let runStatus = await openai.beta.threads.runs.retrieve(thread.id, run.id);
+    let attempts = 0;
+    const maxAttempts = 60; // 60 seconds max
+
+    while (runStatus.status !== 'completed' && attempts < maxAttempts) {
+      if (runStatus.status === 'failed' || runStatus.status === 'cancelled') {
+        console.log('[/chat] Run failed:', runStatus);
+        return res.status(500).json({ error: 'Assistant run failed', status: runStatus.status });
+      }
+
+      // Handle function calls if the assistant needs to search invoices
+      if (runStatus.status === 'requires_action') {
+        const toolCalls = runStatus.required_action?.submit_tool_outputs?.tool_calls;
+        
+        if (toolCalls) {
+          const toolOutputs = [];
+
+          for (const toolCall of toolCalls) {
+            console.log('[/chat] Tool call:', toolCall.function.name);
+            const args = JSON.parse(toolCall.function.arguments);
+
+            if (toolCall.function.name === 'search_invoices') {
+              const searchResult = await searchInvoices(args.user_id || userId, args.query, args.filters);
+              toolOutputs.push({
+                tool_call_id: toolCall.id,
+                output: JSON.stringify(searchResult)
+              });
+            } else if (toolCall.function.name === 'get_invoice_details') {
+              const invoiceResult = await getInvoiceDetails(args.user_id || userId, args.invoice_id);
+              toolOutputs.push({
+                tool_call_id: toolCall.id,
+                output: JSON.stringify(invoiceResult)
+              });
+            } else if (toolCall.function.name === 'get_savings_summary') {
+              const savingsResult = await getSavingsSummary(args.user_id || userId, args.date_range);
+              toolOutputs.push({
+                tool_call_id: toolCall.id,
+                output: JSON.stringify(savingsResult)
+              });
+            }
+          }
+
+          // Submit tool outputs
+          await openai.beta.threads.runs.submitToolOutputs(thread.id, run.id, {
+            tool_outputs: toolOutputs
+          });
+        }
+      }
+
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      runStatus = await openai.beta.threads.runs.retrieve(thread.id, run.id);
+      attempts++;
+    }
+
+    if (attempts >= maxAttempts) {
+      return res.status(500).json({ error: 'Assistant timed out' });
+    }
+
+    // Get the assistant's response
+    const messages = await openai.beta.threads.messages.list(thread.id);
+    const assistantMessage = messages.data.find(m => m.role === 'assistant');
+
+    if (!assistantMessage) {
+      return res.status(500).json({ error: 'No response from assistant' });
+    }
+
+    const responseText = assistantMessage.content[0]?.text?.value || '';
+
+    res.json({
+      success: true,
+      response: responseText,
+      threadId: thread.id
+    });
+
+  } catch (error) {
+    console.error('[/chat] Error:', error);
+    res.status(500).json({ error: 'Chat failed', message: error.message });
+  }
+});
+
+// ==========================================
+// HELPER FUNCTIONS FOR ASSISTANT TOOLS
+// ==========================================
+
+async function searchInvoices(userId, query, filters = {}) {
+  try {
+    console.log('[searchInvoices] userId:', userId, 'query:', query, 'filters:', filters);
+
+    if (!userId) {
+      return { error: 'User not logged in', invoices: [] };
+    }
+
+    let dbQuery = supabase
+      .from('parsed_invoices')
+      .select('id, vendor_name, invoice_number, invoice_date, po_number, job_site, customer_name, rental_subtotal, freight, fees_total, tax, total, fee_percentage, equipment')
+      .eq('user_id', userId)
+      .order('invoice_date', { ascending: false });
+
+    // Apply filters
+    if (filters.vendor) {
+      dbQuery = dbQuery.ilike('vendor_name', `%${filters.vendor}%`);
+    }
+    if (filters.date_from) {
+      dbQuery = dbQuery.gte('invoice_date', filters.date_from);
+    }
+    if (filters.date_to) {
+      dbQuery = dbQuery.lte('invoice_date', filters.date_to);
+    }
+
+    // Text search across multiple fields
+    if (query) {
+      dbQuery = dbQuery.or(`invoice_number.ilike.%${query}%,po_number.ilike.%${query}%,job_site.ilike.%${query}%,vendor_name.ilike.%${query}%,customer_name.ilike.%${query}%`);
+    }
+
+    const { data, error } = await dbQuery.limit(10);
+
+    if (error) {
+      console.log('[searchInvoices] Error:', error);
+      return { error: error.message, invoices: [] };
+    }
+
+    console.log('[searchInvoices] Found:', data?.length || 0, 'invoices');
+    return { invoices: data || [] };
+
+  } catch (err) {
+    console.error('[searchInvoices] Exception:', err);
+    return { error: err.message, invoices: [] };
+  }
+}
+
+async function getInvoiceDetails(userId, invoiceId) {
+  try {
+    console.log('[getInvoiceDetails] userId:', userId, 'invoiceId:', invoiceId);
+
+    if (!userId) {
+      return { error: 'User not logged in' };
+    }
+
+    const { data, error } = await supabase
+      .from('parsed_invoices')
+      .select('*')
+      .eq('id', invoiceId)
+      .eq('user_id', userId)
+      .single();
+
+    if (error) {
+      console.log('[getInvoiceDetails] Error:', error);
+      return { error: error.message };
+    }
+
+    return { invoice: data };
+
+  } catch (err) {
+    console.error('[getInvoiceDetails] Exception:', err);
+    return { error: err.message };
+  }
+}
+
+async function getSavingsSummary(userId, dateRange = {}) {
+  try {
+    console.log('[getSavingsSummary] userId:', userId, 'dateRange:', dateRange);
+
+    if (!userId) {
+      return { error: 'User not logged in' };
+    }
+
+    let query = supabase
+      .from('parsed_invoices')
+      .select('id, invoice_date, vendor_name, market_savings, fee_percentage, fees_total, rental_subtotal')
+      .eq('user_id', userId);
+
+    if (dateRange.from) {
+      query = query.gte('invoice_date', dateRange.from);
+    }
+    if (dateRange.to) {
+      query = query.lte('invoice_date', dateRange.to);
+    }
+
+    const { data, error } = await query;
+
+    if (error) {
+      console.log('[getSavingsSummary] Error:', error);
+      return { error: error.message };
+    }
+
+    // Calculate summary
+    const totalInvoices = data?.length || 0;
+    const totalMarketSavings = data?.reduce((sum, inv) => sum + (parseFloat(inv.market_savings) || 0), 0) || 0;
+    const totalFees = data?.reduce((sum, inv) => sum + (parseFloat(inv.fees_total) || 0), 0) || 0;
+    const totalRental = data?.reduce((sum, inv) => sum + (parseFloat(inv.rental_subtotal) || 0), 0) || 0;
+    const avgFeePercentage = totalRental > 0 ? (totalFees / totalRental) * 100 : 0;
+
+    // Top savings opportunities
+    const topSavings = data
+      ?.filter(inv => inv.market_savings > 0)
+      ?.sort((a, b) => b.market_savings - a.market_savings)
+      ?.slice(0, 5) || [];
+
+    return {
+      summary: {
+        total_invoices: totalInvoices,
+        total_potential_savings: totalMarketSavings.toFixed(2),
+        total_fees_paid: totalFees.toFixed(2),
+        total_rental_spend: totalRental.toFixed(2),
+        average_fee_percentage: avgFeePercentage.toFixed(1)
+      },
+      top_savings_opportunities: topSavings
+    };
+
+  } catch (err) {
+    console.error('[getSavingsSummary] Exception:', err);
+    return { error: err.message };
+  }
+}
+
+// ==========================================
+// SEARCH INVOICES ENDPOINT (direct access)
+// ==========================================
+
+app.post('/search-invoices', async (req, res) => {
+  try {
+    const { userId, query, filters } = req.body;
+
+    if (!userId) {
+      return res.status(401).json({ error: 'User ID required' });
+    }
+
+    const result = await searchInvoices(userId, query, filters);
+    res.json(result);
+
+  } catch (error) {
+    console.error('[/search-invoices] Error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ==========================================
+// INVOICE PARSING ENDPOINTS (existing)
+// ==========================================
 
 app.post('/parse', upload.single('file'), async (req, res) => {
   try {
@@ -471,6 +756,7 @@ Return ONLY the JSON, no markdown.`
     res.status(500).json({ success: false, error: error.message });
   }
 });
+
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
   console.log(`ParseAPI running on port ${PORT}`);
