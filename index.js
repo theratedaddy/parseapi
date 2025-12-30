@@ -131,6 +131,16 @@ app.post('/chat', async (req, res) => {
 
     const responseText = assistantMessage.content[0]?.text?.value || '';
 
+    // Log the conversation to Supabase
+    await supabase.from('chat_logs').insert({
+      user_id: userId || null,
+      thread_id: thread.id,
+      user_message: message,
+      assistant_response: responseText,
+      is_logged_in: isLoggedIn || false,
+      mode: isLoggedIn ? 'dashboard' : 'landing'
+    });
+
     res.json({
       success: true,
       response: responseText,
