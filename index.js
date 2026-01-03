@@ -346,6 +346,66 @@ EXAMPLE: If you see "DELIVERY CHARGE $220.00" and "PICKUP CHARGE $220.00", then 
 If you see NO delivery/pickup charges, freight = 0.00
 
 ===========================================
+METER / OVERTIME / OVERAGE CHARGES - FLAG THESE
+===========================================
+IMPORTANT: These are charges for running equipment more than quoted hours. ALWAYS extract these into "meter_charges".
+
+Look for ANY of these terms:
+- METER CHARGE, METER CHG, METER OVERAGE, METER FEE
+- HOUR METER, HOURS OVER, HOURS OVERAGE
+- OVERTIME, OVERTIME CHARGE, OT CHARGE, OT FEE
+- OVERAGE, OVERAGE CHARGE, OVERAGE FEE
+- EXCESS HOURS, EXCESS USE, EXCESS USAGE
+- ADDITIONAL HOURS, EXTRA HOURS, OVER HOURS
+- SHIFT OVERAGE, SECOND SHIFT, 2ND SHIFT, DOUBLE SHIFT, TRIPLE SHIFT, 3RD SHIFT
+- EXTENDED USE, USAGE CHARGE, USAGE OVERAGE
+- OVERHOURS, OVER-HOURS
+
+Put the TOTAL of all meter/overtime charges in "meter_charges".
+
+===========================================
+FLAGGED CHARGES - ALWAYS CAPTURE THESE
+===========================================
+These are extra charges that often surprise contractors. Put them in "flagged_charges" object with the charge name and amount.
+
+AFTER HOURS / EMERGENCY:
+- AFTER HOURS, AFTER HOURS FEE, AFTER-HOURS, AFTERHOURS
+- EMERGENCY, EMERGENCY FEE, EMERGENCY DELIVERY, EMERGENCY PICKUP
+- 911, 911 CALL, 911 FEE
+- NIGHT CHARGE, NIGHT FEE, NIGHT DELIVERY
+- WEEKEND CHARGE, WEEKEND FEE, WEEKEND DELIVERY
+- SATURDAY DELIVERY, SUNDAY DELIVERY
+- HOLIDAY CHARGE, HOLIDAY FEE, HOLIDAY DELIVERY
+- RUSH, RUSH FEE, RUSH CHARGE, RUSH DELIVERY
+- EXPEDITE, EXPEDITE FEE, EXPEDITED
+- OFF HOURS, OFF-HOURS
+
+GATE / ACCESS / WAIT FEES:
+- GATE FEE, GATE CHARGE
+- ACCESS FEE, ACCESS CHARGE
+- SITE ACCESS, JOB SITE ACCESS
+- SECURITY FEE, SECURITY CHARGE
+- BADGE FEE, BADGING FEE
+- WAIT TIME, WAITING TIME, WAITING CHARGE
+- STANDBY, STANDBY TIME, STANDBY CHARGE
+- DETENTION, DETENTION CHARGE
+- DRY RUN, DRY RUN FEE
+
+MINIMUM / SERVICE / TRIP CHARGES:
+- MINIMUM CHARGE, MINIMUM FEE, MIN CHARGE
+- MINIMUM SERVICE, MINIMUM SERVICE CHARGE
+- SERVICE CALL, SERVICE CALL FEE
+- TRIP CHARGE, TRIP FEE
+- CALL OUT, CALL OUT FEE, CALLOUT
+- DISPATCH FEE, DISPATCH CHARGE
+
+CLEANING / DAMAGE / RETURN FEES:
+- CLEANING, CLEANING FEE, CLEANING CHARGE, WASH FEE
+- DAMAGE, DAMAGE CHARGE, DAMAGE FEE (not DAMAGE WAIVER)
+- LATE RETURN, LATE FEE, LATE CHARGE
+- REFUEL, REFUELING, REFUEL CHARGE, FUEL SERVICE
+
+===========================================
 FEES - THESE ARE SURCHARGES, NOT FREIGHT
 ===========================================
 Put these in the "fees" object:
@@ -357,12 +417,13 @@ Put these in the "fees" object:
 - Everything else that's a surcharge → fees.other
 
 DO NOT put delivery/pickup charges in fees. Those go in "freight".
+DO NOT put meter/overtime charges in fees. Those go in "meter_charges".
 
 ===========================================
 RENTAL SUBTOTAL
 ===========================================
 Sum ONLY the equipment rental line items (the actual equipment being rented).
-DO NOT include fees, freight, tax, fuel, or any surcharges.
+DO NOT include fees, freight, tax, fuel, meter charges, or any surcharges.
 
 ===========================================
 RETURN THIS EXACT JSON STRUCTURE
@@ -387,6 +448,8 @@ RETURN THIS EXACT JSON STRUCTURE
   ],
   "rental_subtotal": 0.00,
   "freight": 0.00,
+  "meter_charges": 0.00,
+  "flagged_charges": {},
   "fees": {
     "transport_surcharge": 0.00,
     "environmental": 0.00,
@@ -421,7 +484,7 @@ Return ONLY the JSON. No markdown. No explanation.` },
     }
     
     const rentalSubtotal = parseFloat(parsed.rental_subtotal) || 0;
-    const freightKeywords = ['delivery', 'pickup', 'pick up', 'pick-up', 'freight', 'hauling', 'mobilization', 'demobilization', 'cartage'];
+    const freightKeywords = ['delivery', 'pickup', 'pick up', 'pick-up', 'freight', 'hauling', 'mobilization', 'demobilization', 'cartage', 'transport', 'trucking', 'inbound', 'outbound', 'drayage'];
     let extractedFreight = parseFloat(parsed.freight) || 0;
     let remainingFees = {};
     
@@ -439,6 +502,8 @@ Return ONLY the JSON. No markdown. No explanation.` },
     }
     
     const freight = extractedFreight;
+    const meterCharges = parseFloat(parsed.meter_charges) || 0;
+    const flaggedCharges = parsed.flagged_charges || {};
     const feesTotal = Object.values(remainingFees).reduce((sum, f) => sum + (parseFloat(f) || 0), 0);
     const feePercentage = rentalSubtotal > 0 ? (feesTotal / rentalSubtotal) * 100 : 0;
     
@@ -461,6 +526,8 @@ Return ONLY the JSON. No markdown. No explanation.` },
       job_site: parsed.job_site || null,
       rental_subtotal: rentalSubtotal || null,
       freight: freight || null,
+      meter_charges: meterCharges > 0 ? meterCharges : null,
+      flagged_charges: Object.keys(flaggedCharges).length > 0 ? flaggedCharges : null,
       fees_total: feesTotal || null,
       tax: parseFloat(parsed.tax) || null,
       total: parseFloat(parsed.total) || null,
@@ -554,6 +621,8 @@ Return ONLY the JSON. No markdown. No explanation.` },
         ...parsed,
         id: invoiceId,
         freight: freight,
+        meter_charges: meterCharges,
+        flagged_charges: flaggedCharges,
         fees_total: feesTotal,
         fee_percentage: feePercentage,
         market_savings: totalMarketSavings,
