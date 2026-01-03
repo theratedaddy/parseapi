@@ -322,34 +322,53 @@ app.post('/parse-base64', async (req, res) => {
       messages: [{
         role: 'user',
         content: [
-          { type: 'text', text: `You are an invoice parser for construction equipment rentals. Extract data from this invoice and return ONLY valid JSON.
+          { type: 'text', text: `You are an invoice parser for construction equipment rentals. Extract data and return ONLY valid JSON.
 
-IMPORTANT - FREIGHT EXTRACTION:
-Look for these line items in the SALES ITEMS section or anywhere on the invoice. These are FREIGHT charges - ADD THEM UP and put the total in the "freight" field:
-- DELIVERY/PICK UP
-- DELIVERY/PICKUP  
-- OUTSIDE FREIGHT DELIVERY
-- OUTSIDE FREIGHT PICKUP
-- DELIVERY (by itself)
-- PICKUP or PICK UP (by itself)
-- HAULING
-- MOBILIZATION
-- DEMOBILIZATION
+===========================================
+FREIGHT - THIS IS CRITICAL - READ CAREFULLY
+===========================================
+The "freight" field must contain the TOTAL of ALL delivery and pickup charges.
 
-FEES (put in "fees" object - these are surcharges, NOT freight):
-- TRANS SRVC SURCHARGE → fees.transport_surcharge
-- ENVIRONMENTAL or ENV SURCHARGE → fees.environmental  
-- DAMAGE WAIVER or LDW or RENTAL PROTECTION → fees.rental_protection
+SCAN THE ENTIRE INVOICE for ANY line item containing these words and ADD UP their dollar amounts:
+- DELIVERY, DELIVERY CHARGE, DELIVERY FEE, DELIVERY/PICKUP, DELIVERY/PICK UP, DELIVERY & PICKUP, DEL/PU, DEL CHARGE
+- PICKUP, PICKUP CHARGE, PICK UP, PICK UP CHARGE, PICK-UP, PICK-UP CHARGE, PU CHARGE
+- FREIGHT, FREIGHT CHARGE, FREIGHT FEE, OUTSIDE FREIGHT, OUTSIDE FREIGHT CHARGE, OUTSIDE FREIGHT DELIVERY, OUTSIDE FREIGHT PICKUP
+- OUTSIDE DELIVERY, OUTSIDE DELIVERY CHARGE, OUTSIDE PICKUP, OUTSIDE PICKUP CHARGE
+- TRANSPORTATION, TRANSPORTATION CHARGE, TRANSPORTATION FEE, TRANSPORT, TRANSPORT CHARGE, TRANSPORT FEE (but NOT "TRANSPORT SURCHARGE" - that's a fee)
+- HAULING, HAULING CHARGE, HAUL CHARGE, HAUL FEE, CARTAGE, DRAYAGE, TRUCKING, TRUCKING CHARGE
+- MOBILIZATION, MOB, DEMOBILIZATION, DEMOB, MOB/DEMOB
+- INBOUND, OUTBOUND, INBOUND FREIGHT, OUTBOUND FREIGHT, ROUND TRIP
+
+ADD UP every dollar amount next to those words and put the total in "freight".
+
+EXAMPLE: If you see "DELIVERY CHARGE $220.00" and "PICKUP CHARGE $220.00", then freight = 440.00
+
+If you see NO delivery/pickup charges, freight = 0.00
+
+===========================================
+FEES - THESE ARE SURCHARGES, NOT FREIGHT
+===========================================
+Put these in the "fees" object:
+- ENVIRONMENTAL SERVICE CHARGE or ENV → fees.environmental
+- RENTAL PROTECTION or DAMAGE WAIVER or LDW → fees.rental_protection
 - FUEL SURCHARGE → fees.fuel_surcharge
 - ADMIN FEE → fees.admin_fee
-- Any other surcharge → fees.other
+- TRANS SRVC SURCHARGE or TRANSPORT SURCHARGE → fees.transport_surcharge
+- Everything else that's a surcharge → fees.other
 
-RENTAL_SUBTOTAL:
-- Sum ONLY the equipment rental line items
-- DO NOT include fees, freight, or tax
+DO NOT put delivery/pickup charges in fees. Those go in "freight".
 
+===========================================
+RENTAL SUBTOTAL
+===========================================
+Sum ONLY the equipment rental line items (the actual equipment being rented).
+DO NOT include fees, freight, tax, fuel, or any surcharges.
+
+===========================================
+RETURN THIS EXACT JSON STRUCTURE
+===========================================
 {
-  "vendor": "Company name",
+  "vendor": "Company name from invoice",
   "invoice_number": "Invoice number",
   "invoice_date": "YYYY-MM-DD",
   "po_number": "PO number or null",
@@ -357,8 +376,8 @@ RENTAL_SUBTOTAL:
   "job_site": "Job site address or null",
   "equipment": [
     {
-      "description": "Equipment name",
-      "serial_number": "Serial or null",
+      "description": "Equipment name/description",
+      "serial_number": "Serial number or null",
       "day_rate": 0.00,
       "week_rate": 0.00,
       "four_week_rate": 0.00,
@@ -381,7 +400,7 @@ RENTAL_SUBTOTAL:
   "confidence": "high"
 }
 
-Return ONLY the JSON, no markdown.` },
+Return ONLY the JSON. No markdown. No explanation.` },
           { type: 'image_url', image_url: { url: `data:${mimeType || 'image/png'};base64,${base64Image}` } }
         ]
       }],
@@ -402,7 +421,7 @@ Return ONLY the JSON, no markdown.` },
     }
     
     const rentalSubtotal = parseFloat(parsed.rental_subtotal) || 0;
-    const freightKeywords = ['delivery', 'pickup', 'pick up', 'freight', 'hauling', 'mobilization', 'demobilization'];
+    const freightKeywords = ['delivery', 'pickup', 'pick up', 'pick-up', 'freight', 'hauling', 'mobilization', 'demobilization', 'cartage'];
     let extractedFreight = parseFloat(parsed.freight) || 0;
     let remainingFees = {};
     
@@ -410,7 +429,7 @@ Return ONLY the JSON, no markdown.` },
       for (const [feeName, feeAmount] of Object.entries(parsed.fees)) {
         const lowerName = feeName.toLowerCase();
         const amount = parseFloat(feeAmount) || 0;
-        const isFreight = freightKeywords.some(kw => lowerName.includes(kw));
+        const isFreight = freightKeywords.some(kw => lowerName.includes(kw)) && !lowerName.includes('surcharge');
         if (isFreight && amount > 0) {
           extractedFreight += amount;
         } else {
