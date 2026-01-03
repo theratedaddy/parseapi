@@ -322,123 +322,102 @@ app.post('/parse-base64', async (req, res) => {
       messages: [{
         role: 'user',
         content: [
-          { type: 'text', text: `You are an invoice parser for construction equipment rentals. Extract data and return ONLY valid JSON.
+          { type: 'text', text: `You are an expert invoice parser for construction equipment rentals. Extract ALL charges from this invoice.
 
 ===========================================
-FREIGHT - THIS IS CRITICAL - READ CAREFULLY
+CRITICAL: SCAN THE ENTIRE INVOICE LINE BY LINE
 ===========================================
-The "freight" field must contain the TOTAL of ALL delivery and pickup charges.
-
-SCAN THE ENTIRE INVOICE for ANY line item containing these words and ADD UP their dollar amounts:
-- DELIVERY, DELIVERY CHARGE, DELIVERY FEE, DELIVERY/PICKUP, DELIVERY/PICK UP, DELIVERY & PICKUP, DEL/PU, DEL CHARGE
-- PICKUP, PICKUP CHARGE, PICK UP, PICK UP CHARGE, PICK-UP, PICK-UP CHARGE, PU CHARGE
-- FREIGHT, FREIGHT CHARGE, FREIGHT FEE, OUTSIDE FREIGHT, OUTSIDE FREIGHT CHARGE, OUTSIDE FREIGHT DELIVERY, OUTSIDE FREIGHT PICKUP
-- OUTSIDE DELIVERY, OUTSIDE DELIVERY CHARGE, OUTSIDE PICKUP, OUTSIDE PICKUP CHARGE
-- TRANSPORTATION, TRANSPORTATION CHARGE, TRANSPORTATION FEE, TRANSPORT, TRANSPORT CHARGE, TRANSPORT FEE (but NOT "TRANSPORT SURCHARGE" - that's a fee)
-- HAULING, HAULING CHARGE, HAUL CHARGE, HAUL FEE, CARTAGE, DRAYAGE, TRUCKING, TRUCKING CHARGE
-- MOBILIZATION, MOB, DEMOBILIZATION, DEMOB, MOB/DEMOB
-- INBOUND, OUTBOUND, INBOUND FREIGHT, OUTBOUND FREIGHT, ROUND TRIP
-
-ADD UP every dollar amount next to those words and put the total in "freight".
-
-EXAMPLE: If you see "DELIVERY CHARGE $220.00" and "PICKUP CHARGE $220.00", then freight = 440.00
-
-If you see NO delivery/pickup charges, freight = 0.00
+Read every single line item on this invoice. Do not skip any charges.
 
 ===========================================
-METER / OVERTIME / OVERAGE CHARGES - FLAG THESE
+EQUIPMENT & METER CHARGES
 ===========================================
-IMPORTANT: These are charges for running equipment more than quoted hours. ALWAYS extract these into "meter_charges".
+For each piece of equipment, extract:
+- description, serial_number, day_rate, week_rate, four_week_rate, rental_days, amount
 
-Look for ANY of these terms:
-- METER CHARGE, METER CHG, METER OVERAGE, METER FEE
-- HOUR METER, HOURS OVER, HOURS OVERAGE
-- OVERTIME, OVERTIME CHARGE, OT CHARGE, OT FEE
-- OVERAGE, OVERAGE CHARGE, OVERAGE FEE
-- EXCESS HOURS, EXCESS USE, EXCESS USAGE
-- ADDITIONAL HOURS, EXTRA HOURS, OVER HOURS
-- SHIFT OVERAGE, SECOND SHIFT, 2ND SHIFT, DOUBLE SHIFT, TRIPLE SHIFT, 3RD SHIFT
-- EXTENDED USE, USAGE CHARGE, USAGE OVERAGE
-- OVERHOURS, OVER-HOURS
+IMPORTANT - METER CHARGES: Look for "Meter chg", "Meter charge", "Hour meter", "Meter out/in" on equipment lines.
+If you see "Meter chg: $X" or similar on an equipment line, that is a METER OVERAGE charge.
+Add ALL meter charges together and put in "meter_charges" field.
 
-Put the TOTAL of all meter/overtime charges in "meter_charges".
+Example: "Meter out: 679.20 Meter in: 695.20 Meter chg: 1,350.53" → meter_charges: 1350.53
 
 ===========================================
-FLAGGED CHARGES - ALWAYS CAPTURE THESE
+FREIGHT / DELIVERY / PICKUP
 ===========================================
-These are extra charges that often surprise contractors. Put them in "flagged_charges" object with the charge name and amount.
+Add together ALL of these and put the TOTAL in "freight":
+- DELIVERY CHARGE, DELIVERY FEE, DELIVERY
+- PICKUP CHARGE, PICKUP FEE, PICK UP, PICK-UP
+- FREIGHT, FREIGHT CHARGE
+- HAULING, CARTAGE, TRUCKING
+- MOBILIZATION, DEMOBILIZATION, MOB/DEMOB
 
-AFTER HOURS / EMERGENCY:
-- AFTER HOURS, AFTER HOURS FEE, AFTER-HOURS, AFTERHOURS
-- EMERGENCY, EMERGENCY FEE, EMERGENCY DELIVERY, EMERGENCY PICKUP
-- 911, 911 CALL, 911 FEE
-- NIGHT CHARGE, NIGHT FEE, NIGHT DELIVERY
-- WEEKEND CHARGE, WEEKEND FEE, WEEKEND DELIVERY
-- SATURDAY DELIVERY, SUNDAY DELIVERY
-- HOLIDAY CHARGE, HOLIDAY FEE, HOLIDAY DELIVERY
-- RUSH, RUSH FEE, RUSH CHARGE, RUSH DELIVERY
-- EXPEDITE, EXPEDITE FEE, EXPEDITED
-- OFF HOURS, OFF-HOURS
-
-GATE / ACCESS / WAIT FEES:
-- GATE FEE, GATE CHARGE
-- ACCESS FEE, ACCESS CHARGE
-- SITE ACCESS, JOB SITE ACCESS
-- SECURITY FEE, SECURITY CHARGE
-- BADGE FEE, BADGING FEE
-- WAIT TIME, WAITING TIME, WAITING CHARGE
-- STANDBY, STANDBY TIME, STANDBY CHARGE
-- DETENTION, DETENTION CHARGE
-- DRY RUN, DRY RUN FEE
-
-MINIMUM / SERVICE / TRIP CHARGES:
-- MINIMUM CHARGE, MINIMUM FEE, MIN CHARGE
-- MINIMUM SERVICE, MINIMUM SERVICE CHARGE
-- SERVICE CALL, SERVICE CALL FEE
-- TRIP CHARGE, TRIP FEE
-- CALL OUT, CALL OUT FEE, CALLOUT
-- DISPATCH FEE, DISPATCH CHARGE
-
-CLEANING / DAMAGE / RETURN FEES:
-- CLEANING, CLEANING FEE, CLEANING CHARGE, WASH FEE
-- DAMAGE, DAMAGE CHARGE, DAMAGE FEE (not DAMAGE WAIVER)
-- LATE RETURN, LATE FEE, LATE CHARGE
-- REFUEL, REFUELING, REFUEL CHARGE, FUEL SERVICE
+Example: DELIVERY CHARGE $220 + PICKUP CHARGE $220 = freight: 440
 
 ===========================================
-FEES - THESE ARE SURCHARGES, NOT FREIGHT
+FEES - PUT IN "fees" OBJECT
 ===========================================
-Put these in the "fees" object:
-- ENVIRONMENTAL SERVICE CHARGE or ENV → fees.environmental
-- RENTAL PROTECTION or DAMAGE WAIVER or LDW → fees.rental_protection
-- FUEL SURCHARGE → fees.fuel_surcharge
-- ADMIN FEE → fees.admin_fee
-- TRANS SRVC SURCHARGE or TRANSPORT SURCHARGE → fees.transport_surcharge
-- Everything else that's a surcharge → fees.other
+FUEL CHARGES → fees.fuel_surcharge:
+- REFUELING SERVICE CHARGE
+- REFUEL CHARGE
+- FUEL SURCHARGE
+- FUEL SERVICE
+- DSL (diesel fuel)
 
-DO NOT put delivery/pickup charges in fees. Those go in "freight".
-DO NOT put meter/overtime charges in fees. Those go in "meter_charges".
+ENVIRONMENTAL → fees.environmental:
+- ENVIRONMENTAL SERVICE CHARGE
+- ENV CHARGE
+- ENVIRONMENTAL FEE
+
+RENTAL PROTECTION → fees.rental_protection:
+- RENTAL PROTECTION
+- DAMAGE WAIVER
+- LDW
+- PHYSICAL DAMAGE WAIVER
+- PDW
+- EQUIPMENT PROTECTION
+
+ADMIN/OTHER → fees.admin_fee or fees.other:
+- ADMIN FEE
+- SERVICE FEE
+- PROCESSING FEE
+
+TRANSPORT SURCHARGE → fees.transport_surcharge:
+- TRANS SRVC SURCHARGE
+- TRANSPORT SURCHARGE
+- TRANSPORTATION SURCHARGE
+(This is different from delivery/freight - it's a percentage surcharge)
+
+===========================================
+TAXES - DO NOT PUT IN FEES
+===========================================
+These are TAXES, not fees. Add them to the "tax" field:
+- SALES TAX
+- STATE TAX
+- PROPERTY TAX (like "TX UNIT PROPERTY TAX")
+- DIESEL TAX (like "TEXAS DIESEL TAX")
+- Any line with "TAX" in the name
 
 ===========================================
 RENTAL SUBTOTAL
 ===========================================
-Sum ONLY the equipment rental line items (the actual equipment being rented).
-DO NOT include fees, freight, tax, fuel, meter charges, or any surcharges.
+This is ONLY the equipment rental charges. 
+Look for "Rental Subtotal" on the invoice.
+DO NOT include fees, freight, tax, fuel, or meter charges.
 
 ===========================================
-RETURN THIS EXACT JSON STRUCTURE
+RETURN THIS JSON
 ===========================================
 {
-  "vendor": "Company name from invoice",
+  "vendor": "Company name",
   "invoice_number": "Invoice number",
   "invoice_date": "YYYY-MM-DD",
-  "po_number": "PO number or null",
-  "customer_name": "Bill to name",
-  "job_site": "Job site address or null",
+  "po_number": "PO or null",
+  "customer_name": "Customer name",
+  "job_site": "Job site or null",
   "equipment": [
     {
-      "description": "Equipment name/description",
-      "serial_number": "Serial number or null",
+      "description": "Equipment description",
+      "serial_number": "Serial or null",
       "day_rate": 0.00,
       "week_rate": 0.00,
       "four_week_rate": 0.00,
@@ -449,12 +428,11 @@ RETURN THIS EXACT JSON STRUCTURE
   "rental_subtotal": 0.00,
   "freight": 0.00,
   "meter_charges": 0.00,
-  "flagged_charges": {},
   "fees": {
-    "transport_surcharge": 0.00,
-    "environmental": 0.00,
     "fuel_surcharge": 0.00,
+    "environmental": 0.00,
     "rental_protection": 0.00,
+    "transport_surcharge": 0.00,
     "admin_fee": 0.00,
     "other": 0.00
   },
@@ -463,7 +441,7 @@ RETURN THIS EXACT JSON STRUCTURE
   "confidence": "high"
 }
 
-Return ONLY the JSON. No markdown. No explanation.` },
+Return ONLY valid JSON. No markdown. No explanation.` },
           { type: 'image_url', image_url: { url: `data:${mimeType || 'image/png'};base64,${base64Image}` } }
         ]
       }],
@@ -526,12 +504,13 @@ Return ONLY the JSON. No markdown. No explanation.` },
       job_site: parsed.job_site || null,
       rental_subtotal: rentalSubtotal || null,
       freight: freight || null,
+      freight_total: freight || null,
       meter_charges: meterCharges > 0 ? meterCharges : null,
       flagged_charges: Object.keys(flaggedCharges).length > 0 ? flaggedCharges : null,
       fees_total: feesTotal || null,
       tax: parseFloat(parsed.tax) || null,
       total: parseFloat(parsed.total) || null,
-      fees: parsed.fees || {},
+      fees: remainingFees || {},
       equipment: parsed.equipment || [],
       fee_percentage: feePercentage || null,
       confidence: parsed.confidence || null,
@@ -621,8 +600,10 @@ Return ONLY the JSON. No markdown. No explanation.` },
         ...parsed,
         id: invoiceId,
         freight: freight,
+        freight_total: freight,
         meter_charges: meterCharges,
         flagged_charges: flaggedCharges,
+        fees: remainingFees,
         fees_total: feesTotal,
         fee_percentage: feePercentage,
         market_savings: totalMarketSavings,
