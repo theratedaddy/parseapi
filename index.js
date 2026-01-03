@@ -482,7 +482,7 @@ Return ONLY valid JSON. No markdown. No explanation.` },
     const freight = extractedFreight;
     const meterCharges = parseFloat(parsed.meter_charges) || 0;
     const flaggedCharges = parsed.flagged_charges || {};
-    const feesTotal = Object.values(remainingFees).reduce((sum, f) => sum + (parseFloat(f) || 0), 0);
+    const feesTotal = Object.values(remainingFees).reduce((sum, f) => sum + (parseFloat(f) || 0), 0) + meterCharges;
     const feePercentage = rentalSubtotal > 0 ? (feesTotal / rentalSubtotal) * 100 : 0;
     
     const rentalKeywords = ['herc', 'sunbelt', 'united rentals', 'ohio cat', 'admar', 'skyworks', 'caterpillar', 'rental', 'leppo'];
