@@ -121,7 +121,7 @@ async function getSavingsSummary(userId, dateRange = {}) {
   }
 }
 
-async function saveGiveawayEntry(email, prizeVote) {
+async function saveGiveawayEntry(email, prizeVote, ipAddress) {
   try {
     if (!email) return { error: 'Email is required' };
     
@@ -134,7 +134,8 @@ async function saveGiveawayEntry(email, prizeVote) {
         referral_code: referralCode,
         prize_vote: prizeVote,
         referral_count: 0,
-        entered_drawing: true
+        entered_drawing: true,
+        ip_address: ipAddress || null
       })
       .select()
       .single();
@@ -156,6 +157,7 @@ async function saveGiveawayEntry(email, prizeVote) {
     return { error: err.message };
   }
 }
+    
 
 // ==========================================
 // CHAT ENDPOINT
@@ -223,7 +225,8 @@ app.post('/chat', async (req, res) => {
               const result = await getSavingsSummary(args.user_id || userId, args.date_range);
               toolOutputs.push({ tool_call_id: toolCall.id, output: JSON.stringify(result) });
             } else if (toolCall.function.name === 'save_giveaway_entry') {
-              const result = await saveGiveawayEntry(args.email, args.prize_vote);
+              const userIP = req.headers['x-forwarded-for']?.split(',')[0] || req.headers['x-real-ip'] || req.ip || 'unknown';
+              const result = await saveGiveawayEntry(args.email, args.prize_vote, userIP);
               toolOutputs.push({ tool_call_id: toolCall.id, output: JSON.stringify(result) });
             }
           }
