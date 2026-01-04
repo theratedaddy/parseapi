@@ -42,6 +42,122 @@ app.get('/test-db', async (req, res) => {
 });
 
 // ==========================================
+// HELPER FUNCTIONS
+// ==========================================
+async function searchInvoices(userId, query, filters = {}) {
+  try {
+    if (!userId) return { error: 'User not logged in', invoices: [] };
+
+    let dbQuery = supabase
+      .from('parsed_invoices')
+      .select('id, vendor_name, invoice_number, invoice_date, po_number, job_site, customer_name, rental_subtotal, freight, fees_total, tax, total, fee_percentage, equipment')
+      .eq('user_id', userId)
+      .order('invoice_date', { ascending: false });
+
+    if (filters.vendor) dbQuery = dbQuery.ilike('vendor_name', `%${filters.vendor}%`);
+    if (filters.date_from) dbQuery = dbQuery.gte('invoice_date', filters.date_from);
+    if (filters.date_to) dbQuery = dbQuery.lte('invoice_date', filters.date_to);
+    if (query) dbQuery = dbQuery.or(`invoice_number.ilike.%${query}%,po_number.ilike.%${query}%,job_site.ilike.%${query}%,vendor_name.ilike.%${query}%,customer_name.ilike.%${query}%`);
+
+    const { data, error } = await dbQuery.limit(10);
+    if (error) return { error: error.message, invoices: [] };
+    return { invoices: data || [] };
+  } catch (err) {
+    return { error: err.message, invoices: [] };
+  }
+}
+
+async function getInvoiceDetails(userId, invoiceId) {
+  try {
+    if (!userId) return { error: 'User not logged in' };
+    const { data, error } = await supabase
+      .from('parsed_invoices')
+      .select('*')
+      .eq('id', invoiceId)
+      .eq('user_id', userId)
+      .single();
+    if (error) return { error: error.message };
+    return { invoice: data };
+  } catch (err) {
+    return { error: err.message };
+  }
+}
+
+async function getSavingsSummary(userId, dateRange = {}) {
+  try {
+    if (!userId) return { error: 'User not logged in' };
+
+    let query = supabase
+      .from('parsed_invoices')
+      .select('id, invoice_date, vendor_name, market_savings, fee_percentage, fees_total, rental_subtotal')
+      .eq('user_id', userId);
+
+    if (dateRange.from) query = query.gte('invoice_date', dateRange.from);
+    if (dateRange.to) query = query.lte('invoice_date', dateRange.to);
+
+    const { data, error } = await query;
+    if (error) return { error: error.message };
+
+    const totalInvoices = data?.length || 0;
+    const totalMarketSavings = data?.reduce((sum, inv) => sum + (parseFloat(inv.market_savings) || 0), 0) || 0;
+    const totalFees = data?.reduce((sum, inv) => sum + (parseFloat(inv.fees_total) || 0), 0) || 0;
+    const totalRental = data?.reduce((sum, inv) => sum + (parseFloat(inv.rental_subtotal) || 0), 0) || 0;
+    const avgFeePercentage = totalRental > 0 ? (totalFees / totalRental) * 100 : 0;
+
+    const topSavings = data?.filter(inv => inv.market_savings > 0)?.sort((a, b) => b.market_savings - a.market_savings)?.slice(0, 5) || [];
+
+    return {
+      summary: {
+        total_invoices: totalInvoices,
+        total_potential_savings: totalMarketSavings.toFixed(2),
+        total_fees_paid: totalFees.toFixed(2),
+        total_rental_spend: totalRental.toFixed(2),
+        average_fee_percentage: avgFeePercentage.toFixed(1)
+      },
+      top_savings_opportunities: topSavings
+    };
+  } catch (err) {
+    return { error: err.message };
+  }
+}
+
+async function saveGiveawayEntry(email, prizeVote) {
+  try {
+    if (!email) return { error: 'Email is required' };
+    
+    const referralCode = Math.random().toString(36).substring(2, 10).toUpperCase();
+    
+    const { data, error } = await supabase
+      .from('referrals')
+      .insert({
+        email: email,
+        referral_code: referralCode,
+        prize_vote: prizeVote,
+        referral_count: 0,
+        entered_drawing: true
+      })
+      .select()
+      .single();
+    
+    if (error) {
+      if (error.code === '23505') {
+        const { data: existing } = await supabase
+          .from('referrals')
+          .select('referral_code')
+          .eq('email', email)
+          .single();
+        return { success: true, referral_code: existing?.referral_code, message: 'Already registered' };
+      }
+      return { error: error.message };
+    }
+    
+    return { success: true, referral_code: referralCode };
+  } catch (err) {
+    return { error: err.message };
+  }
+}
+
+// ==========================================
 // CHAT ENDPOINT
 // ==========================================
 app.post('/chat', async (req, res) => {
@@ -155,86 +271,6 @@ app.post('/chat', async (req, res) => {
     res.status(500).json({ error: 'Chat failed', message: error.message });
   }
 });
-
-// ==========================================
-// HELPER FUNCTIONS
-// ==========================================
-async function searchInvoices(userId, query, filters = {}) {
-  try {
-    if (!userId) return { error: 'User not logged in', invoices: [] };
-
-    let dbQuery = supabase
-      .from('parsed_invoices')
-      .select('id, vendor_name, invoice_number, invoice_date, po_number, job_site, customer_name, rental_subtotal, freight, fees_total, tax, total, fee_percentage, equipment')
-      .eq('user_id', userId)
-      .order('invoice_date', { ascending: false });
-
-    if (filters.vendor) dbQuery = dbQuery.ilike('vendor_name', `%${filters.vendor}%`);
-    if (filters.date_from) dbQuery = dbQuery.gte('invoice_date', filters.date_from);
-    if (filters.date_to) dbQuery = dbQuery.lte('invoice_date', filters.date_to);
-    if (query) dbQuery = dbQuery.or(`invoice_number.ilike.%${query}%,po_number.ilike.%${query}%,job_site.ilike.%${query}%,vendor_name.ilike.%${query}%,customer_name.ilike.%${query}%`);
-
-    const { data, error } = await dbQuery.limit(10);
-    if (error) return { error: error.message, invoices: [] };
-    return { invoices: data || [] };
-  } catch (err) {
-    return { error: err.message, invoices: [] };
-  }
-}
-
-async function getInvoiceDetails(userId, invoiceId) {
-  try {
-    if (!userId) return { error: 'User not logged in' };
-    const { data, error } = await supabase
-      .from('parsed_invoices')
-      .select('*')
-      .eq('id', invoiceId)
-      .eq('user_id', userId)
-      .single();
-    if (error) return { error: error.message };
-    return { invoice: data };
-  } catch (err) {
-    return { error: err.message };
-  }
-}
-
-async function getSavingsSummary(userId, dateRange = {}) {
-  try {
-    if (!userId) return { error: 'User not logged in' };
-
-    let query = supabase
-      .from('parsed_invoices')
-      .select('id, invoice_date, vendor_name, market_savings, fee_percentage, fees_total, rental_subtotal')
-      .eq('user_id', userId);
-
-    if (dateRange.from) query = query.gte('invoice_date', dateRange.from);
-    if (dateRange.to) query = query.lte('invoice_date', dateRange.to);
-
-    const { data, error } = await query;
-    if (error) return { error: error.message };
-
-    const totalInvoices = data?.length || 0;
-    const totalMarketSavings = data?.reduce((sum, inv) => sum + (parseFloat(inv.market_savings) || 0), 0) || 0;
-    const totalFees = data?.reduce((sum, inv) => sum + (parseFloat(inv.fees_total) || 0), 0) || 0;
-    const totalRental = data?.reduce((sum, inv) => sum + (parseFloat(inv.rental_subtotal) || 0), 0) || 0;
-    const avgFeePercentage = totalRental > 0 ? (totalFees / totalRental) * 100 : 0;
-
-    const topSavings = data?.filter(inv => inv.market_savings > 0)?.sort((a, b) => b.market_savings - a.market_savings)?.slice(0, 5) || [];
-
-    return {
-      summary: {
-        total_invoices: totalInvoices,
-        total_potential_savings: totalMarketSavings.toFixed(2),
-        total_fees_paid: totalFees.toFixed(2),
-        total_rental_spend: totalRental.toFixed(2),
-        average_fee_percentage: avgFeePercentage.toFixed(1)
-      },
-      top_savings_opportunities: topSavings
-    };
-  } catch (err) {
-    return { error: err.message };
-  }
-}
 
 // ==========================================
 // SEARCH INVOICES ENDPOINT
