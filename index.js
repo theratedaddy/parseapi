@@ -106,6 +106,9 @@ app.post('/chat', async (req, res) => {
             } else if (toolCall.function.name === 'get_savings_summary') {
               const result = await getSavingsSummary(args.user_id || userId, args.date_range);
               toolOutputs.push({ tool_call_id: toolCall.id, output: JSON.stringify(result) });
+            } else if (toolCall.function.name === 'save_giveaway_entry') {
+              const result = await saveGiveawayEntry(args.email, args.prize_vote);
+              toolOutputs.push({ tool_call_id: toolCall.id, output: JSON.stringify(result) });
             }
           }
 
