@@ -595,6 +595,11 @@ Return ONLY valid JSON. No markdown. No explanation.` },
               const savings = savingsData[0];
               totalMarketSavings += parseFloat(savings.total_overpaid) || 0;
               
+              const marketAvg = parseFloat(savings.market_rate_avg) || 0;
+              const overpaidPct = (marketAvg > 0 && actualAmount > marketAvg) 
+                ? ((actualAmount - marketAvg) / marketAvg) * 100 
+                : 0;
+              
               equipmentWithRates.push({
                 ...item,
                 calculated_amount: actualAmount,
@@ -606,6 +611,7 @@ Return ONLY valid JSON. No markdown. No explanation.` },
                 market_rate_avg: savings.market_rate_avg,
                 overpaid_per_day: savings.overpaid_per_day,
                 total_overpaid: savings.total_overpaid,
+                overpaid_percentage: savings.overpaid_percentage || overpaidPct,
                 data_source: savings.data_source
               });
               
