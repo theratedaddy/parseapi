@@ -3,6 +3,9 @@ const { createClient } = require('@supabase/supabase-js');
 const express = require('express');
 const multer = require('multer');
 const OpenAI = require('openai');
+const { parse: csvParse } = require('csv-parse/sync');
+const cheerio = require('cheerio');
+const axios = require('axios');
 
 const app = express();
 const upload = multer({ storage: multer.memoryStorage() });
@@ -662,6 +665,299 @@ Return ONLY valid JSON. No markdown. No explanation.` },
   } catch (error) {
     console.error('Parse error:', error);
     res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// ==========================================
+// CONTRACTOR LEAD SCRAPER ENDPOINTS
+// ==========================================
+
+// Helper function to extract email from a page
+async function scrapeContractorDetails(detailUrl) {
+  try {
+    const response = await axios.get(detailUrl, {
+      timeout: 15000,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+      }
+    });
+    
+    const $ = cheerio.load(response.data);
+    const html = response.data;
+    
+    // Try to find email - multiple strategies
+    let email = null;
+    let contactName = null;
+    
+    // Strategy 1: Look for mailto links
+    $('a[href^="mailto:"]').each((i, el) => {
+      if (!email) {
+        const href = $(el).attr('href');
+        email = href.replace('mailto:', '').split('?')[0].trim();
+      }
+    });
+    
+    // Strategy 2: Regex search for email in page content
+    if (!email) {
+      const emailRegex = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
+      const matches = html.match(emailRegex);
+      if (matches && matches.length > 0) {
+        // Filter out common non-business emails
+        const validEmails = matches.filter(e => 
+          !e.includes('example.com') && 
+          !e.includes('accela.com') &&
+          !e.includes('placeholder')
+        );
+        if (validEmails.length > 0) {
+          email = validEmails[0];
+        }
+      }
+    }
+    
+    // Strategy 3: Look for email in labeled fields
+    if (!email) {
+      $('td, span, div').each((i, el) => {
+        const text = $(el).text().toLowerCase();
+        if (text.includes('email') || text.includes('e-mail')) {
+          const nextText = $(el).next().text();
+          const emailMatch = nextText.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/);
+          if (emailMatch && !email) {
+            email = emailMatch[0];
+          }
+        }
+      });
+    }
+    
+    // Try to find contact name
+    // Look for fields labeled "Contact", "Name", "Business Contact", etc.
+    $('td, span, div, label').each((i, el) => {
+      const text = $(el).text().toLowerCase().trim();
+      if ((text === 'contact' || text === 'contact name' || text === 'business contact' || text.includes('contact:')) && !contactName) {
+        // Check next sibling or parent's next child
+        let nextText = $(el).next().text().trim();
+        if (!nextText) {
+          nextText = $(el).parent().next().text().trim();
+        }
+        if (nextText && nextText.length > 2 && nextText.length < 100 && !nextText.includes('@')) {
+          contactName = nextText;
+        }
+      }
+    });
+    
+    // Also look for name patterns near "Owner", "Principal", "Qualifier"
+    if (!contactName) {
+      const namePatterns = ['owner', 'principal', 'qualifier', 'responsible party'];
+      $('td, span, div').each((i, el) => {
+        const text = $(el).text().toLowerCase();
+        if (namePatterns.some(p => text.includes(p)) && !contactName) {
+          const nextText = $(el).next().text().trim();
+          if (nextText && nextText.length > 2 && nextText.length < 100 && !nextText.includes('@')) {
+            contactName = nextText;
+          }
+        }
+      });
+    }
+    
+    return { email, contactName };
+  } catch (error) {
+    console.log(`Error scraping ${detailUrl}:`, error.message);
+    return { email: null, contactName: null };
+  }
+}
+
+// POST /scrape-contractors - Upload CSV and scrape contractor details
+app.post('/scrape-contractors', upload.single('file'), async (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: 'No CSV file uploaded' });
+    }
+    
+    const csvContent = req.file.buffer.toString('utf-8');
+    
+    // Parse CSV
+    let records;
+    try {
+      records = csvParse(csvContent, {
+        columns: true,
+        skip_empty_lines: true,
+        trim: true
+      });
+    } catch (parseError) {
+      return res.status(400).json({ error: 'Failed to parse CSV', details: parseError.message });
+    }
+    
+    if (!records || records.length === 0) {
+      return res.status(400).json({ error: 'CSV is empty or has no valid rows' });
+    }
+    
+    console.log(`[/scrape-contractors] Processing ${records.length} rows`);
+    console.log('[/scrape-contractors] CSV columns:', Object.keys(records[0]));
+    
+    const results = {
+      total: records.length,
+      processed: 0,
+      emails_found: 0,
+      saved: 0,
+      errors: []
+    };
+    
+    // Process each row
+    for (const row of records) {
+      try {
+        // Map CSV columns - adjust based on actual column names
+        const businessName = row['business_name'] || row['BUSINESS_NAME'] || row['Business Name'] || row['BusinessName'] || null;
+        const phone = row['phone'] || row['PHONE'] || row['Phone'] || row['PHONE_NUMBER'] || null;
+        const licenseType = row['license_type'] || row['LICENSE_TYPE'] || row['License Type'] || row['LicenseType'] || null;
+        const address = row['address'] || row['ADDRESS'] || row['Address'] || row['STREET_ADDRESS'] || null;
+        const city = row['city'] || row['CITY'] || row['City'] || null;
+        const state = row['state'] || row['STATE'] || row['State'] || null;
+        const zip = row['zip'] || row['ZIP'] || row['Zip'] || row['POSTAL_CODE'] || row['postal_code'] || null;
+        const applicationId = row['application_id'] || row['APPLICATION_ID'] || row['Application ID'] || row['ApplicationId'] || row['RECORD_ID'] || null;
+        const detailUrl = row['detail_url'] || row['DETAIL_URL'] || row['ACCELA_CITIZEN_ACCESS_URL'] || row['URL'] || null;
+        
+        // Skip rows without a business name
+        if (!businessName) {
+          results.errors.push({ row: results.processed + 1, error: 'Missing business name' });
+          results.processed++;
+          continue;
+        }
+        
+        let email = null;
+        let contactName = null;
+        
+        // Scrape the detail page if URL is provided
+        if (detailUrl) {
+          const scraped = await scrapeContractorDetails(detailUrl);
+          email = scraped.email;
+          contactName = scraped.contactName;
+          
+          if (email) {
+            results.emails_found++;
+          }
+        }
+        
+        // Save to Supabase
+        const { error: insertError } = await supabase.from('contractor_leads').insert({
+          business_name: businessName,
+          phone: phone,
+          license_type: licenseType,
+          address: address,
+          city: city,
+          state: state,
+          zip: zip,
+          application_id: applicationId,
+          detail_url: detailUrl,
+          email: email,
+          contact_name: contactName,
+          scraped_at: new Date().toISOString()
+        });
+        
+        if (insertError) {
+          // Check for duplicate - if so, try to update instead
+          if (insertError.code === '23505') {
+            // Duplicate entry - update if we have new email
+            if (email && applicationId) {
+              await supabase
+                .from('contractor_leads')
+                .update({ email, contact_name: contactName, scraped_at: new Date().toISOString() })
+                .eq('application_id', applicationId);
+            }
+            results.saved++;
+          } else {
+            results.errors.push({ row: results.processed + 1, businessName, error: insertError.message });
+          }
+        } else {
+          results.saved++;
+        }
+        
+        results.processed++;
+        
+        // Small delay to avoid overwhelming the target server
+        if (detailUrl) {
+          await new Promise(resolve => setTimeout(resolve, 200));
+        }
+        
+      } catch (rowError) {
+        results.errors.push({ row: results.processed + 1, error: rowError.message });
+        results.processed++;
+      }
+    }
+    
+    console.log(`[/scrape-contractors] Complete: ${results.saved} saved, ${results.emails_found} emails found`);
+    
+    res.json({
+      success: true,
+      summary: {
+        total_rows: results.total,
+        processed: results.processed,
+        saved: results.saved,
+        emails_found: results.emails_found,
+        errors_count: results.errors.length
+      },
+      errors: results.errors.slice(0, 10) // Only return first 10 errors
+    });
+    
+  } catch (error) {
+    console.error('[/scrape-contractors] Error:', error);
+    res.status(500).json({ error: 'Failed to process contractors', message: error.message });
+  }
+});
+
+// GET /contractor-leads - Retrieve all contractor leads
+app.get('/contractor-leads', async (req, res) => {
+  try {
+    const { limit = 100, offset = 0, has_email, city, state, license_type } = req.query;
+    
+    let query = supabase
+      .from('contractor_leads')
+      .select('*')
+      .order('scraped_at', { ascending: false });
+    
+    // Filter by email presence
+    if (has_email === 'true') {
+      query = query.not('email', 'is', null);
+    } else if (has_email === 'false') {
+      query = query.is('email', null);
+    }
+    
+    // Filter by location
+    if (city) {
+      query = query.ilike('city', `%${city}%`);
+    }
+    if (state) {
+      query = query.ilike('state', `%${state}%`);
+    }
+    if (license_type) {
+      query = query.ilike('license_type', `%${license_type}%`);
+    }
+    
+    // Pagination
+    query = query.range(parseInt(offset), parseInt(offset) + parseInt(limit) - 1);
+    
+    const { data, error, count } = await query;
+    
+    if (error) {
+      return res.status(500).json({ error: error.message });
+    }
+    
+    // Get total count
+    const { count: totalCount } = await supabase
+      .from('contractor_leads')
+      .select('*', { count: 'exact', head: true });
+    
+    res.json({
+      success: true,
+      data: data || [],
+      pagination: {
+        limit: parseInt(limit),
+        offset: parseInt(offset),
+        total: totalCount || data?.length || 0
+      }
+    });
+    
+  } catch (error) {
+    console.error('[/contractor-leads] Error:', error);
+    res.status(500).json({ error: 'Failed to retrieve contractor leads', message: error.message });
   }
 });
 
