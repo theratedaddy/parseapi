@@ -796,6 +796,7 @@ app.post('/scrape-contractors', upload.single('file'), async (req, res) => {
     const results = {
       total: records.length,
       processed: 0,
+      skipped: 0,
       emails_found: 0,
       saved: 0,
       errors: []
@@ -820,6 +821,22 @@ app.post('/scrape-contractors', upload.single('file'), async (req, res) => {
           results.errors.push({ row: results.processed + 1, error: 'Missing business name' });
           results.processed++;
           continue;
+        }
+        
+        // Check if this application_id already exists in the database - skip if so
+        if (applicationId) {
+          const { data: existing } = await supabase
+            .from('contractor_leads')
+            .select('id')
+            .eq('application_id', applicationId)
+            .limit(1)
+            .single();
+          
+          if (existing) {
+            results.skipped++;
+            results.processed++;
+            continue;
+          }
         }
         
         let email = null;
@@ -853,19 +870,7 @@ app.post('/scrape-contractors', upload.single('file'), async (req, res) => {
         });
         
         if (insertError) {
-          // Check for duplicate - if so, try to update instead
-          if (insertError.code === '23505') {
-            // Duplicate entry - update if we have new email
-            if (email && applicationId) {
-              await supabase
-                .from('contractor_leads')
-                .update({ email, contact_name: contactName, scraped_at: new Date().toISOString() })
-                .eq('application_id', applicationId);
-            }
-            results.saved++;
-          } else {
-            results.errors.push({ row: results.processed + 1, businessName, error: insertError.message });
-          }
+          results.errors.push({ row: results.processed + 1, businessName, error: insertError.message });
         } else {
           results.saved++;
         }
@@ -883,14 +888,15 @@ app.post('/scrape-contractors', upload.single('file'), async (req, res) => {
       }
     }
     
-    console.log(`[/scrape-contractors] Complete: ${results.saved} saved, ${results.emails_found} emails found`);
+    console.log(`[/scrape-contractors] Complete: ${results.saved} saved, ${results.skipped} skipped, ${results.emails_found} emails found`);
     
     res.json({
       success: true,
       summary: {
         total_rows: results.total,
         processed: results.processed,
-        saved: results.saved,
+        skipped_existing: results.skipped,
+        new_saved: results.saved,
         emails_found: results.emails_found,
         errors_count: results.errors.length
       },
