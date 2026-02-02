@@ -450,12 +450,23 @@ Look for "Rental Subtotal" on the invoice.
 DO NOT include fees, freight, tax, fuel, or meter charges.
 
 ===========================================
+BILLING DATES - CRITICAL FOR RENTAL PERIOD
+===========================================
+Look for "Billed From" / "Billed Through" or "Rental Start" / "Rental End" dates.
+These tell us the actual rental duration. Extract them in YYYY-MM-DD format.
+Calculate rental_days by counting days between these dates.
+
+Example: Billed From: 05/27/25, Billed Through: 06/24/25 = 28 days
+
+===========================================
 RETURN THIS JSON
 ===========================================
 {
   "vendor": "Company name",
   "invoice_number": "Invoice number",
   "invoice_date": "YYYY-MM-DD",
+  "billed_from": "YYYY-MM-DD or null",
+  "billed_through": "YYYY-MM-DD or null",
   "po_number": "PO or null",
   "customer_name": "Customer name",
   "job_site": "Job site or null",
@@ -466,7 +477,7 @@ RETURN THIS JSON
       "day_rate": 0.00,
       "week_rate": 0.00,
       "four_week_rate": 0.00,
-      "rental_days": 1,
+      "rental_days": 28,
       "amount": 0.00
     }
   ],
@@ -485,6 +496,9 @@ RETURN THIS JSON
   "total": 0.00,
   "confidence": "high"
 }
+
+IMPORTANT: Calculate rental_days from billed_from to billed_through. Do NOT default to 1 day.
+If dates show a 28-day period, rental_days should be 28, not 1.
 
 Return ONLY valid JSON. No markdown. No explanation.` },
           { type: 'image_url', image_url: { url: `data:${mimeType || 'image/png'};base64,${base64Image}` } }
@@ -544,6 +558,8 @@ Return ONLY valid JSON. No markdown. No explanation.` },
       vendor_normalized: vendorLower.split(' ')[0] || null,
       invoice_number: parsed.invoice_number || null,
       invoice_date: parsed.invoice_date || null,
+      billed_from: parsed.billed_from || null,
+      billed_through: parsed.billed_through || null,
       po_number: parsed.po_number || null,
       customer_name: parsed.customer_name || null,
       job_site: parsed.job_site || null,
@@ -570,9 +586,24 @@ Return ONLY valid JSON. No markdown. No explanation.` },
     let totalMarketSavings = 0;
     const equipmentWithRates = [];
     
+    // Calculate rental days from billed dates if available
+    let invoiceRentalDays = 28; // Default to monthly
+    if (parsed.billed_from && parsed.billed_through) {
+      try {
+        const fromDate = new Date(parsed.billed_from);
+        const toDate = new Date(parsed.billed_through);
+        const diffTime = Math.abs(toDate - fromDate);
+        const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+        if (diffDays > 0) invoiceRentalDays = diffDays;
+        console.log('Calculated rental days from dates:', diffDays);
+      } catch (e) { /* ignore */ }
+    }
+
     if (parsed.equipment && parsed.equipment.length > 0) {
       for (const item of parsed.equipment) {
-        const rentalDays = parseInt(item.rental_days) || 1;
+        // Use item rental_days if > 1, otherwise use calculated from dates
+        const itemDays = parseInt(item.rental_days);
+        const rentalDays = (itemDays && itemDays > 1) ? itemDays : invoiceRentalDays;
         let actualAmount = parseFloat(item.amount) || 0;
         
         if (actualAmount === 0) {
