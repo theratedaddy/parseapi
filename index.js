@@ -300,17 +300,65 @@ function calculateExpectedAmount(dayRate, weekRate, fourWeekRate, rentalDays) {
   const week = parseFloat(weekRate) || 0;
   const month = parseFloat(fourWeekRate) || 0;
   const days = parseInt(rentalDays) || 1;
-  
+
   if (day === 0 && week === 0 && month === 0) return 0;
-  
+
   const effectiveDay = day || (week / 5) || (month / 20);
   const effectiveWeek = week || (day * 5) || (month / 4);
   const effectiveMonth = month || (week * 4) || (day * 20);
-  
+
   if (days <= 2) return effectiveDay * days;
   if (days <= 6) return Math.min(effectiveDay * days, effectiveWeek);
   if (days <= 27) return Math.min(effectiveDay * days, effectiveWeek * Math.ceil(days / 7), effectiveMonth);
   return Math.min(effectiveMonth * Math.ceil(days / 28), effectiveWeek * Math.ceil(days / 7));
+}
+
+// Infer rental days from the charged amount by comparing to day/week/month rates
+function inferRentalDaysFromAmount(amount, dayRate, weekRate, fourWeekRate) {
+  const amt = parseFloat(amount) || 0;
+  const day = parseFloat(dayRate) || 0;
+  const week = parseFloat(weekRate) || 0;
+  const month = parseFloat(fourWeekRate) || 0;
+
+  if (amt === 0) return null;
+
+  // Check if amount matches any standard rate (with 5% tolerance for rounding)
+  const tolerance = 0.05;
+
+  // Check if it's a day rate
+  if (day > 0 && Math.abs(amt - day) / day <= tolerance) return 1;
+
+  // Check if it's a week rate
+  if (week > 0 && Math.abs(amt - week) / week <= tolerance) return 7;
+
+  // Check if it's a 4-week/month rate
+  if (month > 0 && Math.abs(amt - month) / month <= tolerance) return 28;
+
+  // Check for 2-week (2x week rate)
+  if (week > 0 && Math.abs(amt - (week * 2)) / (week * 2) <= tolerance) return 14;
+
+  // Check for 3-week (3x week rate)
+  if (week > 0 && Math.abs(amt - (week * 3)) / (week * 3) <= tolerance) return 21;
+
+  // Check for 2-day
+  if (day > 0 && Math.abs(amt - (day * 2)) / (day * 2) <= tolerance) return 2;
+
+  // Check for 3-day
+  if (day > 0 && Math.abs(amt - (day * 3)) / (day * 3) <= tolerance) return 3;
+
+  // If amount is close to week but less than month, estimate based on week rate
+  if (week > 0 && amt > week && month > 0 && amt < month) {
+    const weeks = Math.round(amt / week);
+    if (weeks >= 1 && weeks <= 4) return weeks * 7;
+  }
+
+  // If amount is greater than month rate, calculate multiples
+  if (month > 0 && amt >= month) {
+    const months = Math.round(amt / month);
+    if (months >= 1) return months * 28;
+  }
+
+  return null; // Couldn't determine
 }
 
 app.post('/parse', upload.single('file'), async (req, res) => {
@@ -601,10 +649,30 @@ Return ONLY valid JSON. No markdown. No explanation.` },
 
     if (parsed.equipment && parsed.equipment.length > 0) {
       for (const item of parsed.equipment) {
-        // Use item rental_days if > 1, otherwise use calculated from dates
-        const itemDays = parseInt(item.rental_days);
-        const rentalDays = (itemDays && itemDays > 1) ? itemDays : invoiceRentalDays;
         let actualAmount = parseFloat(item.amount) || 0;
+
+        // PRIORITY 1: Infer rental days from the charged amount vs rate schedule
+        // This is the most accurate method when day/week/month rates are provided
+        const inferredDays = inferRentalDaysFromAmount(
+          actualAmount,
+          item.day_rate,
+          item.week_rate,
+          item.four_week_rate
+        );
+
+        // PRIORITY 2: Use item rental_days if provided and > 1
+        const itemDays = parseInt(item.rental_days);
+
+        // PRIORITY 3: Fall back to invoice-level rental days (from billed dates)
+        let rentalDays;
+        if (inferredDays) {
+          rentalDays = inferredDays;
+          console.log(`Inferred ${rentalDays} days for ${item.description} from amount $${actualAmount}`);
+        } else if (itemDays && itemDays > 1) {
+          rentalDays = itemDays;
+        } else {
+          rentalDays = invoiceRentalDays;
+        }
         
         if (actualAmount === 0) {
           actualAmount = calculateExpectedAmount(item.day_rate, item.week_rate, item.four_week_rate, rentalDays);
